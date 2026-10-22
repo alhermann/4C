@@ -193,7 +193,8 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
           Particle::State::CurrentConnectedBonds, Particle::State::PDDamageVariable});
 
       // force of the fluid on the PD particles for the half kicks of the multi-rate integration
-      if (pd_substeps_ > 1) particlestates.insert(Particle::State::CouplingForce);
+      if (pd_substeps_ > 1)
+        particlestates.insert({Particle::State::CouplingForce, Particle::State::SubstepVelocity});
 
       // surface correction factors
       if (surface_correction_) particlestates.insert(Particle::State::PDSurfaceCorrection);
@@ -1033,14 +1034,31 @@ void Particle::SPHPeridynamic::integrate_substeps(
     }
   }
 
-  // the evaluation at t_n+1 adds to the acceleration (as after the pre-interaction routine of the
-  // single-rate scheme): clear it, except the prescribed acceleration of Dirichlet particles
   if (particlestored > 0)
   {
+    const double* pos = container->get_ptr_to_state(Particle::State::Position, 0);
+    double* vel = container->get_ptr_to_state_writable(Particle::State::Velocity, 0);
+    double* substepvel = container->get_ptr_to_state_writable(Particle::State::SubstepVelocity, 0);
     double* acc = container->get_ptr_to_state_writable(Particle::State::Acceleration, 0);
     for (int i = 0; i < particlestored; ++i)
-      if (not prescribed(i))
-        for (int dim = 0; dim < statedim; ++dim) acc[statedim * i + dim] = 0.0;
+    {
+      if (prescribed(i)) continue;
+      for (int dim = 0; dim < statedim; ++dim)
+      {
+        const int idx = statedim * i + dim;
+
+        // in the evaluation at t_n+1 the fluid sees the PD particles with the velocity of the time
+        // level of its own, the mean velocity (x_n+1 - x_n) / dt over the step (identical to the
+        // half-step velocity of single-rate velocity Verlet); the velocity after the substeps is
+        // kept for the closing kick
+        substepvel[idx] = vel[idx];
+        vel[idx] = (pos[idx] - pos_n[idx]) / dt;
+
+        // the evaluation at t_n+1 adds to the acceleration (as after the pre-interaction routine
+        // of the single-rate scheme); the prescribed acceleration of Dirichlet particles is kept
+        acc[idx] = 0.0;
+      }
+    }
   }
 
   // the contact candidates of t_n are complete if no pair approached by more than the skin: PD
@@ -1089,6 +1107,7 @@ void Particle::SPHPeridynamic::complete_substeps(const double dt) const
   const double* mass = container->get_ptr_to_state(Particle::State::Mass, 0);
   const double* acc = container->get_ptr_to_state(Particle::State::Acceleration, 0);
   const double* couplingforce = container->get_ptr_to_state(Particle::State::CouplingForce, 0);
+  const double* substepvel = container->get_ptr_to_state(Particle::State::SubstepVelocity, 0);
   double* vel = container->get_ptr_to_state_writable(Particle::State::Velocity, 0);
   const double* functid = container->have_stored_state(Particle::State::DirichletFunctionId)
                               ? container->get_ptr_to_state(Particle::State::DirichletFunctionId, 0)
@@ -1098,6 +1117,9 @@ void Particle::SPHPeridynamic::complete_substeps(const double dt) const
   {
     // particles with a per-particle Dirichlet function keep their prescribed velocity
     if (functid and static_cast<int>(functid[i]) > 0) continue;
+
+    // velocity after the substeps (the evaluation at t_n+1 used the mean velocity of the step)
+    ParticleUtils::vec_set(&vel[statedim * i], &substepvel[statedim * i]);
     ParticleUtils::vec_add_scale(&vel[statedim * i], 0.5 * h, &acc[statedim * i]);
     ParticleUtils::vec_add_scale(
         &vel[statedim * i], 0.5 * (dt - h) / mass[i], &couplingforce[statedim * i]);

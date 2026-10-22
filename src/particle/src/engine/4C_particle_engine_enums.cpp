@@ -73,6 +73,7 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::LastIterModifiedAcceleration:
     case ParticleState::CouplingForce:
     case ParticleState::PDSurfaceCorrection:
+    case ParticleState::SubstepVelocity:
       dim = 3;
       break;
 
@@ -235,6 +236,9 @@ std::string Particle::enum_to_state_name(const ParticleState& state)
       break;
     case ParticleState::PDSurfaceCorrection:
       name = "pd_surface_correction";
+      break;
+    case ParticleState::SubstepVelocity:
+      name = "substep_velocity";
       break;
     case ParticleState::OpenBoundaryId:
       name = "open_boundary_id";

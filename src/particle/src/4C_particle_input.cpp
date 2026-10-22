@@ -644,10 +644,10 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
           parameter<bool>("SURFACE_CORRECTION",
               {.description =
                       "surface correction of the bond micromoduli by per-particle factors w (bond "
-                      "factor (w_i + w_j) / 2), given for every PD particle in the particle input "
-                      "(SURFACE_CORRECTION w), e.g. computed by operator matching (perifit) for "
-                      "the "
-                      "discrete operator of 4C (partial volume factors of the bonds)",
+                      "factor (w_i + w_j) / 2, replacing the partial volume factor of the bond), "
+                      "given for every PD particle in the particle input (SURFACE_CORRECTION w), "
+                      "e.g. operator-matching weights (perifit) computed with full particle "
+                      "volumes",
                   .default_value = false}),
 
           // multi-rate time integration of the peridynamic phase

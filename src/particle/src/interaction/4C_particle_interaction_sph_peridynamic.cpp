@@ -505,6 +505,16 @@ void Particle::SPHPeridynamic::compute_bond_forces() const
       double m[3];
       ParticleUtils::vec_set_scale(m, 1.0 / xi_eta_norm, xi_eta);
 
+      // partial volume factor of the bond; with the surface correction the mean of the factors of
+      // both particles (operator-matching weights, which contain the correction of the integration
+      // near the horizon edge, so the partial volume factor is not applied in addition)
+      const double volume_factor =
+          surface_correction_ ? 0.5 * (container_i->get_ptr_to_state(
+                                           Particle::State::PDSurfaceCorrection, particle_i)[0] +
+                                          container_j->get_ptr_to_state(
+                                              Particle::State::PDSurfaceCorrection, particle_j)[0])
+                              : calculate_volume_correction_factor(xi_norm);
+
       // calculate the bond force of the pair
       double fac;
       switch (peridynamic_dimension_)
@@ -512,29 +522,21 @@ void Particle::SPHPeridynamic::compute_bond_forces() const
         case PeridynamicDimension::Peridynamic_3D:
           fac = (12.0 * (young_i[0] + young_j[0]) * 0.5) /
                 (std::numbers::pi * horizon_pd_ * horizon_pd_ * horizon_pd_ * horizon_pd_) *
-                stretch * calculate_volume_correction_factor(xi_norm) * dx_pd_ * dx_pd_ * dx_pd_ *
-                dx_pd_ * dx_pd_ * dx_pd_;
+                stretch * volume_factor * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_;
           break;
         case PeridynamicDimension::Peridynamic_2DPlaneStress:
           fac = (9.0 * (young_i[0] + young_j[0]) * 0.5) /
                 (std::numbers::pi * horizon_pd_ * horizon_pd_ * horizon_pd_) * stretch *
-                calculate_volume_correction_factor(xi_norm) * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_;
+                volume_factor * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_;
           break;
         case PeridynamicDimension::Peridynamic_2DPlaneStrain:
           fac = (48.0 * (young_i[0] + young_j[0]) * 0.5) /
                 (std::numbers::pi * 5.0 * horizon_pd_ * horizon_pd_ * horizon_pd_) * stretch *
-                calculate_volume_correction_factor(xi_norm) * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_;
+                volume_factor * dx_pd_ * dx_pd_ * dx_pd_ * dx_pd_;
           break;
         default:
           std23::unreachable();
       }
-
-      // surface correction of the bond micromodulus: mean of the factors of both particles
-      if (surface_correction_)
-        fac *=
-            0.5 *
-            (container_i->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_i)[0] +
-                container_j->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_j)[0]);
 
       // add bond force contribution
       ParticleUtils::vec_add_scale(force_i, fac, m);
@@ -1247,11 +1249,13 @@ void Particle::SPHPeridynamic::check_substep_stability(const double dt) const
     const double young =
         0.5 * (container_i->get_ptr_to_state(Particle::State::Young, particle_i)[0] +
                   container_j->get_ptr_to_state(Particle::State::Young, particle_j)[0]);
-    double k = stiffness_factor * young * calculate_volume_correction_factor(xi_norm) / xi_norm;
-    if (surface_correction_)
-      k *= 0.5 *
-           (container_i->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_i)[0] +
-               container_j->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_j)[0]);
+    const double volume_factor =
+        surface_correction_ ? 0.5 * (container_i->get_ptr_to_state(
+                                         Particle::State::PDSurfaceCorrection, particle_i)[0] +
+                                        container_j->get_ptr_to_state(
+                                            Particle::State::PDSurfaceCorrection, particle_j)[0])
+                            : calculate_volume_correction_factor(xi_norm);
+    const double k = stiffness_factor * young * volume_factor / xi_norm;
 
     const double* x = xi;
     const double s = k / (xi_norm * xi_norm);

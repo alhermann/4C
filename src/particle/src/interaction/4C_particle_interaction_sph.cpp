@@ -179,6 +179,12 @@ void Particle::ParticleInteractionSPH::setup(
     }
   }
 
+  // multi-rate integration: particles must not be added or removed between the evaluation and the
+  // substeps of the next time step (local indices of bonds and contact candidates)
+  if (peridynamics_ and peridynamics_->pd_substeps() > 1 and
+      (phasechange_ or !openboundaries_.empty()))
+    FOUR_C_THROW("PD_SUBSTEPS > 1 is not available with phase change or open boundaries!");
+
   // runtime csv output of the resultant force on boundary particles
   if (peridynamics_ and params_.sublist("PD").get<bool>("WRITE_BOUNDARY_FORCE") and
       particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))

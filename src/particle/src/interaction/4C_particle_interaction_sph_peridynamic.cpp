@@ -1010,11 +1010,12 @@ void Particle::SPHPeridynamic::integrate_substeps(
       }
     }
 
+    // the force evaluation of the last substep is the evaluation of all interactions at t_n+1
+    // (preceded by the update of the connectivity, which refreshes all ghosted particles)
+    if (k == n - 1) break;
+
     // refresh ghosted PD particles
     particleengineinterface_->refresh_particles_of_specific_states_and_types(pdstatestorefresh);
-
-    // the force evaluation of the last substep is the evaluation of all interactions at t_n+1
-    if (k == n - 1) break;
 
     // bond and contact forces at the current positions
     compute_bond_forces();
@@ -1032,6 +1033,16 @@ void Particle::SPHPeridynamic::integrate_substeps(
     }
   }
 
+  // the evaluation at t_n+1 adds to the acceleration (as after the pre-interaction routine of the
+  // single-rate scheme): clear it, except the prescribed acceleration of Dirichlet particles
+  if (particlestored > 0)
+  {
+    double* acc = container->get_ptr_to_state_writable(Particle::State::Acceleration, 0);
+    for (int i = 0; i < particlestored; ++i)
+      if (not prescribed(i))
+        for (int dim = 0; dim < statedim; ++dim) acc[statedim * i + dim] = 0.0;
+  }
+
   // the contact candidates of t_n are complete if no pair approached by more than the skin: PD
   // particles moved at most maxdisplacement, boundary and prescribed PD particles at most |v| dt
   double maxboundarydisplacement = maxprescribeddisplacement;
@@ -1042,12 +1053,16 @@ void Particle::SPHPeridynamic::integrate_substeps(
             Particle::Type::BoundaryPhase, Particle::Status::Owned);
     const int boundarystored = boundarycontainer->particles_stored();
     const int boundarystatedim = boundarycontainer->get_state_dim(Particle::State::Velocity);
-    if (boundarystored > 0)
+    if (boundarystored > 0 and
+        boundarycontainer->have_stored_state(Particle::State::DirichletFunctionId))
     {
       const double* vel = boundarycontainer->get_ptr_to_state(Particle::State::Velocity, 0);
+      const double* boundaryfunctid =
+          boundarycontainer->get_ptr_to_state(Particle::State::DirichletFunctionId, 0);
       for (int i = 0; i < boundarystored; ++i)
-        maxboundarydisplacement = std::max(
-            maxboundarydisplacement, dt * ParticleUtils::vec_norm_two(&vel[boundarystatedim * i]));
+        if (static_cast<int>(boundaryfunctid[i]) > 0)
+          maxboundarydisplacement = std::max(maxboundarydisplacement,
+              dt * ParticleUtils::vec_norm_two(&vel[boundarystatedim * i]));
     }
   }
   const std::array<double, 2> maxdisp = Core::Communication::max_all(
@@ -1209,10 +1224,15 @@ void Particle::SPHPeridynamic::set_substep_acceleration(const std::vector<double
   const double* force = container->get_ptr_to_state(Particle::State::Force, 0);
   const double* vel = container->get_ptr_to_state(Particle::State::Velocity, 0);
   double* acc = container->get_ptr_to_state_writable(Particle::State::Acceleration, 0);
+  const double* functid = container->have_stored_state(Particle::State::DirichletFunctionId)
+                              ? container->get_ptr_to_state(Particle::State::DirichletFunctionId, 0)
+                              : nullptr;
 
   // as in the evaluation of all interactions: gravity, interaction forces, viscous damping
+  // (particles with a per-particle Dirichlet function keep their prescribed acceleration)
   for (int i = 0; i < particlestored; ++i)
   {
+    if (functid and static_cast<int>(functid[i]) > 0) continue;
     for (int dim = 0; dim < statedim; ++dim) acc[statedim * i + dim] = gravity[dim];
     ParticleUtils::vec_add_scale(&acc[statedim * i], (1.0 / mass[i]), &force[statedim * i]);
     if (viscdampfac_ > 0.0)
@@ -1319,36 +1339,33 @@ void Particle::SPHPeridynamic::check_substep_stability(const double dt) const
   const double omega_bond = std::sqrt(Core::Communication::max_all(omega2_bond, comm_));
   mass_min = Core::Communication::min_all(mass_min, comm_);
 
-  // frequency of one contact spring of a PD particle with a fixed partner
+  // frequency of one contact spring of a PD particle with a fixed partner; the check assumes a
+  // bonded particle with up to four such springs (a PD-PD contact counts twice)
   const double omega_contact = stiff_ > 0.0 ? std::sqrt(stiff_ / mass_min) : 0.0;
+  const int contacts = 4;
+  const double omega_max =
+      std::sqrt(omega_bond * omega_bond + contacts * omega_contact * omega_contact);
+
+  // a velocity Verlet substep rotates a mode of frequency omega by 2 asin(omega h / 2); the first
+  // parametric resonance of the half kicks with the coupling force is reached when n substeps
+  // rotate by pi: omega h < 2 sin(pi / (2 n)) (n = 1: stability limit omega h < 2); margin for
+  // damping and the geometric stiffness of stretched bonds
   const double h = dt / pd_substeps_;
+  const double limit = 0.95 * 2.0 * std::sin(std::numbers::pi / (2.0 * pd_substeps_));
 
   if (Core::Communication::my_mpi_rank(comm_) == 0)
     Core::IO::cout << "PD substeps " << pd_substeps_ << ": time step " << dt << ", substep " << h
-                   << "; highest bond frequency (bound) " << omega_bond
-                   << " 1/s: omega dt = " << omega_bond * dt
-                   << " (limit pi), omega h = " << omega_bond * h
-                   << " (limit 2); one contact spring: omega = " << omega_contact << " 1/s"
-                   << Core::IO::endl;
+                   << "; highest frequency (bound) of the bonds " << omega_bond
+                   << " 1/s, of one contact spring " << omega_contact << " 1/s, of a particle with "
+                   << contacts << " contacts " << omega_max << " 1/s: omega h = " << omega_max * h
+                   << " (limit " << limit << ")" << Core::IO::endl;
 
-  if (omega_bond * dt >= std::numbers::pi)
+  if (omega_max * h >= limit)
     FOUR_C_THROW(
-        "PD substeps: TIMESTEP {} exceeds pi / omega_max = {} of the PD bonds (resonance of the "
-        "multi-rate integration); reduce TIMESTEP!",
-        dt, std::numbers::pi / omega_bond);
-  if (omega_bond * h >= 2.0)
-    FOUR_C_THROW(
-        "PD substeps: substep {} exceeds the stability limit 2 / omega_max = {} of the "
-        "PD bonds; increase PD_SUBSTEPS!",
-        h, 2.0 / omega_bond);
-
-  // a bonded particle in contact with two partners
-  if (std::sqrt(omega_bond * omega_bond + 2.0 * omega_contact * omega_contact) * dt >=
-          std::numbers::pi and
-      Core::Communication::my_mpi_rank(comm_) == 0)
-    Core::IO::cout << "Warning: PD substeps: a bonded PD particle with two contact springs exceeds "
-                      "omega dt = pi (resonance of the multi-rate integration)!"
-                   << Core::IO::endl;
+        "PD substeps: substep {} exceeds the limit {} of the multi-rate integration (resonance "
+        "of the half kicks with the coupling force, bound of the highest PD frequency {} 1/s "
+        "including {} contact springs); reduce TIMESTEP to at most {} or change PD_SUBSTEPS!",
+        h, limit / omega_max, omega_max, contacts, pd_substeps_ * limit / omega_max);
 }
 
 FOUR_C_NAMESPACE_CLOSE

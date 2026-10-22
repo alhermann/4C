@@ -648,7 +648,8 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "number of velocity Verlet substeps of the peridynamic phase per time step "
                       "(bond, contact, gravity and damping forces); the force of the fluid on the "
                       "PD particles is applied as half kicks at the ends of the time step "
-                      "(impulse multiple time stepping); 1 = single rate",
+                      "(impulse multiple time stepping); 1 = single rate; a restart requires a "
+                      "restart file written with substeps",
                   .default_value = 1,
                   .validator = positive<int>()}),
 

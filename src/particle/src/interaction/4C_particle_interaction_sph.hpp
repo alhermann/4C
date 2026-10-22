@@ -21,6 +21,11 @@ FOUR_C_NAMESPACE_OPEN
 /*---------------------------------------------------------------------------*
  | forward declarations                                                      |
  *---------------------------------------------------------------------------*/
+namespace Core::IO
+{
+  class RuntimeCsvWriter;
+}
+
 namespace Particle
 {
   class PDNeighborPairs;
@@ -224,6 +229,15 @@ namespace Particle
     std::vector<double> boundaryimpulse_dbc_funct_ = std::vector<double>(3, 0.0);
     std::vector<double> boundaryimpulse_other_ = std::vector<double>(3, 0.0);
     double boundaryimpulsetime_ = 0.0;
+
+    //! force history on boundary particles: interval in time steps (0: off), evaluations since the
+    //! start, time integral of the force since the last row and its duration
+    int boundaryforceevery_ = 0;
+    std::unique_ptr<Core::IO::RuntimeCsvWriter> boundaryforcehistorywriter_;
+    int boundaryforceevaluations_ = 0;
+    std::vector<double> historyimpulse_dbc_funct_ = std::vector<double>(3, 0.0);
+    std::vector<double> historyimpulse_other_ = std::vector<double>(3, 0.0);
+    double historyimpulsetime_ = 0.0;
 
     //! accumulate the boundary forces and append them to the csv output if requested
     void evaluate_boundary_force_output();

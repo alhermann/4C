@@ -8,6 +8,7 @@
 #include "4C_particle_interaction_sph.hpp"
 
 #include "4C_comm_mpi_utils.hpp"
+#include "4C_global_data.hpp"
 #include "4C_io_pstream.hpp"
 #include "4C_io_runtime_csv_writer.hpp"
 #include "4C_mat_particle_pd.hpp"
@@ -199,6 +200,17 @@ void Particle::ParticleInteractionSPH::setup(
     runtime_csv_writer->register_data_vector("mean_force_dbc_funct", 3, 10);
     runtime_csv_writer->register_data_vector("force_other", 3, 10);
     runtime_csv_writer->register_data_vector("mean_force_other", 3, 10);
+
+    // force history every BOUNDARY_FORCE_EVERY time steps (independent of the result output)
+    boundaryforceevery_ = params_.sublist("PD").get<int>("BOUNDARY_FORCE_EVERY");
+    if (boundaryforceevery_ > 0)
+    {
+      // own writer: rows are written here, not with the result output
+      boundaryforcehistorywriter_ = std::make_unique<Core::IO::RuntimeCsvWriter>(
+          myrank_, *Global::Problem::instance()->output_control_file(), "boundary-force-history");
+      boundaryforcehistorywriter_->register_data_vector("mean_force_dbc_funct", 3, 10);
+      boundaryforcehistorywriter_->register_data_vector("mean_force_other", 3, 10);
+    }
   }
 
   // short screen output
@@ -546,14 +558,42 @@ void Particle::ParticleInteractionSPH::evaluate_boundary_force_output()
   boundaryimpulsetime_ += dt_;
 
   // multi-rate integration: contact forces of the substeps
+  std::vector<double> correction_dbc_funct(3, 0.0), correction_other(3, 0.0);
   if (peridynamics_->pd_substeps() > 1)
   {
-    std::vector<double> correction_dbc_funct, correction_other;
     peridynamics_->take_boundary_impulse_correction(dt_, correction_dbc_funct, correction_other);
     for (int dim = 0; dim < 3; ++dim)
     {
       boundaryimpulse_dbc_funct_[dim] += correction_dbc_funct[dim];
       boundaryimpulse_other_[dim] += correction_other[dim];
+    }
+  }
+
+  // force history: mean force over the last BOUNDARY_FORCE_EVERY time steps
+  if (boundaryforceevery_ > 0)
+  {
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      historyimpulse_dbc_funct_[dim] += dt_ * force_dbc_funct[dim] + correction_dbc_funct[dim];
+      historyimpulse_other_[dim] += dt_ * force_other[dim] + correction_other[dim];
+    }
+    historyimpulsetime_ += dt_;
+
+    if (historyimpulsetime_ > 0.0 and (++boundaryforceevaluations_ % boundaryforceevery_ == 0))
+    {
+      std::vector<double> mean_dbc_funct =
+          Core::Communication::sum_all(historyimpulse_dbc_funct_, comm_);
+      std::vector<double> mean_other = Core::Communication::sum_all(historyimpulse_other_, comm_);
+      for (int dim = 0; dim < 3; ++dim)
+      {
+        mean_dbc_funct[dim] /= historyimpulsetime_;
+        mean_other[dim] /= historyimpulsetime_;
+      }
+      boundaryforcehistorywriter_->write_data_to_file(time_, boundaryforceevaluations_,
+          {{"mean_force_dbc_funct", mean_dbc_funct}, {"mean_force_other", mean_other}});
+      historyimpulse_dbc_funct_.assign(3, 0.0);
+      historyimpulse_other_.assign(3, 0.0);
+      historyimpulsetime_ = 0.0;
     }
   }
 

@@ -633,6 +633,13 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                               "time-averaged since the last output) to a csv file",
                   .default_value = false}),
 
+          // force history on boundary particles
+          parameter<int>("BOUNDARY_FORCE_EVERY",
+              {.description = "with WRITE_BOUNDARY_FORCE: additionally write the resultant force "
+                              "on boundary particles every this many time steps to the csv file "
+                              "boundary-force-history (mean force since the previous row); 0 = off",
+                  .default_value = 0}),
+
           // surface correction of the bond stiffness
           parameter<bool>("SURFACE_CORRECTION",
               {.description =

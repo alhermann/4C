@@ -588,7 +588,22 @@ double Particle::ParticleInteractionSPH::max_interaction_distance() const
 
 void Particle::ParticleInteractionSPH::distribute_interaction_history() const
 {
-  // nothing to do
+  if (not peridynamics_) return;
+
+  // after a restart the particles are distributed to processors other than the ones that read their
+  // bonds: send every bond to the current owners of its particles (as for DEM history pairs)
+  std::vector<int> particlestoproc;
+  particleengineinterface_->relate_all_particles_to_all_procs(particlestoproc);
+
+  std::vector<std::vector<int>> particletargets(Core::Communication::num_mpi_ranks(comm_));
+  for (int globalid = 0; globalid < static_cast<int>(particlestoproc.size()); ++globalid)
+  {
+    const int owner = particlestoproc[globalid];
+    if (owner < 0 or owner == myrank_) continue;
+    particletargets[owner].push_back(globalid);
+  }
+
+  neighborpairs_pd_->communicate_bond_list(particletargets);
 }
 
 void Particle::ParticleInteractionSPH::communicate_interaction_history() const

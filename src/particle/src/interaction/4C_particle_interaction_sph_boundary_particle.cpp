@@ -216,6 +216,12 @@ void Particle::SPHBoundaryParticleAdami::init_boundary_particle_states(std::vect
         ParticleUtils::vec_set(relacc, gravity.data());
         ParticleUtils::vec_sub(relacc, acc_i);
 
+        // PD particles: at this point their acceleration holds gravity (or, without gravity, a
+        // prescribed acceleration), because bond, contact and fluid forces are added later in the
+        // time step; only the non-gravity part is used as wall acceleration, otherwise the
+        // hydrostatic term of the extrapolated pressure would vanish
+        if (type_i == Particle::Type::PDPhase) ParticleUtils::vec_add(relacc, gravity.data());
+
         const double inv_sumj_Wij = 1.0 / sumj_wij_[static_cast<int>(type_i)][particle_i];
 
         // set modified boundary pressure

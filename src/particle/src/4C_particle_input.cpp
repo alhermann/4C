@@ -643,10 +643,11 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
           // surface correction of the bond stiffness
           parameter<bool>("SURFACE_CORRECTION",
               {.description =
-                      "energy-based surface correction of the bond stiffness (Madenci and Oterkus "
-                      "2014): per particle and coordinate direction the ratio of the strain energy "
-                      "density of a uniform extension in the bulk continuum and in the truncated "
-                      "discrete neighborhood, combined per bond along its direction",
+                      "surface correction of the bond micromoduli by per-particle factors w (bond "
+                      "factor (w_i + w_j) / 2), given for every PD particle in the particle input "
+                      "(SURFACE_CORRECTION w), e.g. computed by operator matching (perifit) for "
+                      "the "
+                      "discrete operator of 4C (partial volume factors of the bonds)",
                   .default_value = false}),
 
           // multi-rate time integration of the peridynamic phase

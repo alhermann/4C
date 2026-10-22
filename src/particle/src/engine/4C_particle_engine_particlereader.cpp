@@ -67,7 +67,8 @@ void Particle::read_particles(Core::IO::InputFile& input, const std::string& sec
             {"RAD", Particle::State::Radius}, {"RIGIDCOLOR", Particle::State::RigidBodyColor},
             {"PDBODYID", Particle::State::PDBodyId},
             {"DIRICHLET_FUNCT", Particle::State::DirichletFunctionId},
-            {"BOUNDARYID", Particle::State::OpenBoundaryId}};
+            {"BOUNDARYID", Particle::State::OpenBoundaryId},
+            {"SURFACE_CORRECTION", Particle::State::PDSurfaceCorrection}};
 
         while (!parser.at_end())
         {

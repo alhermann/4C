@@ -106,7 +106,8 @@ namespace Particle
     CouplingForce,  //!< force of the fluid on a pd particle at the last evaluation
     /*---------------------------------------------------------------------------*/
     // particle states for the surface correction of peridynamic bonds
-    PDSurfaceCorrection,  //!< surface correction factors of a pd particle per coordinate direction
+    PDSurfaceCorrection,  //!< surface correction factor of a pd particle (scales its bond
+                          //!< micromoduli)
     /*---------------------------------------------------------------------------*/
     // particle states for multi-rate integration of peridynamic particles (continued)
     SubstepVelocity  //!< velocity of a pd particle after the substeps (until the closing kick)

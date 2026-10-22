@@ -43,6 +43,7 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::PDDamageVariable:
     case ParticleState::DirichletFunctionId:
     case ParticleState::OpenBoundaryId:
+    case ParticleState::PDSurfaceCorrection:
       dim = 1;
       break;
 
@@ -72,7 +73,6 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::LastIterAngularAcceleration:
     case ParticleState::LastIterModifiedAcceleration:
     case ParticleState::CouplingForce:
-    case ParticleState::PDSurfaceCorrection:
     case ParticleState::SubstepVelocity:
       dim = 3;
       break;

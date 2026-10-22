@@ -68,6 +68,14 @@ namespace Particle
     //! damage evaluation of peridynamic body
     void damage_evaluation();
 
+    //! clear force state of boundary particles (reaction of fluid and contact forces on walls)
+    void clear_boundary_forces() const;
+
+    //! sum the forces on owned boundary particles, split into particles with a per-particle
+    //! Dirichlet function (e.g. a moving structure) and all other boundary particles
+    void sum_boundary_forces(
+        std::vector<double>& force_dbc_funct, std::vector<double>& force_other) const;
+
    private:
     //! calculate peridynamic volume correction factor
     double calculate_volume_correction_factor(double xi) const;

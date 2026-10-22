@@ -210,6 +210,17 @@ namespace Particle
 
     //! peridynamic handler
     std::unique_ptr<Particle::SPHPeridynamic> peridynamics_;
+
+    //! runtime csv output of the resultant force on boundary particles (with peridynamics)
+    bool writeboundaryforce_ = false;
+
+    //! time integral of the boundary forces on this processor since the last output
+    std::vector<double> boundaryimpulse_dbc_funct_ = std::vector<double>(3, 0.0);
+    std::vector<double> boundaryimpulse_other_ = std::vector<double>(3, 0.0);
+    double boundaryimpulsetime_ = 0.0;
+
+    //! accumulate the boundary forces and append them to the csv output if requested
+    void evaluate_boundary_force_output();
   };
 
 }  // namespace Particle

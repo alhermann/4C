@@ -627,6 +627,12 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
           parameter<double>("NORMAL_DAMP",
               {.description = "normal contact damping parameter", .default_value = 0.0}),
 
+          // runtime csv output of the resultant force on boundary particles
+          parameter<bool>("WRITE_BOUNDARY_FORCE",
+              {.description = "write the resultant force on boundary particles (current and "
+                              "time-averaged since the last output) to a csv file",
+                  .default_value = false}),
+
           // peridynamic dimension
           parameter<PeridynamicDimension>(
               "PD_DIMENSION", {.description = "dimension of peridynamic problem",

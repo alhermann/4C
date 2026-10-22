@@ -7,12 +7,15 @@
 
 #include "4C_particle_interaction_sph.hpp"
 
+#include "4C_comm_mpi_utils.hpp"
 #include "4C_io_pstream.hpp"
+#include "4C_io_runtime_csv_writer.hpp"
 #include "4C_mat_particle_pd.hpp"
 #include "4C_particle_engine_container.hpp"
 #include "4C_particle_engine_interface.hpp"
 #include "4C_particle_interaction_material_handler.hpp"
 #include "4C_particle_interaction_pd_neighbor_pairs.hpp"
+#include "4C_particle_interaction_runtime_writer.hpp"
 #include "4C_particle_interaction_sph_boundary_particle.hpp"
 #include "4C_particle_interaction_sph_density.hpp"
 #include "4C_particle_interaction_sph_equationofstate.hpp"
@@ -155,6 +158,22 @@ void Particle::ParticleInteractionSPH::setup(
 
   // setup peridynamic handler
   if (peridynamics_) peridynamics_->setup(particleengineinterface, particlematerial_);
+
+  // runtime csv output of the resultant force on boundary particles
+  if (peridynamics_ and params_.sublist("PD").get<bool>("WRITE_BOUNDARY_FORCE") and
+      particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))
+  {
+    writeboundaryforce_ = true;
+    particleinteractionwriter_->register_specific_runtime_csv_writer("boundary-force");
+    Core::IO::RuntimeCsvWriter* runtime_csv_writer =
+        particleinteractionwriter_->get_specific_runtime_csv_writer("boundary-force");
+    // current force and mean force since the last output, for boundary particles with a
+    // per-particle Dirichlet function (moving structure) and for all other boundary particles
+    runtime_csv_writer->register_data_vector("force_dbc_funct", 3, 10);
+    runtime_csv_writer->register_data_vector("mean_force_dbc_funct", 3, 10);
+    runtime_csv_writer->register_data_vector("force_other", 3, 10);
+    runtime_csv_writer->register_data_vector("mean_force_other", 3, 10);
+  }
 
   // short screen output
   if (!openboundaries_.empty() && particleengineinterface_->have_periodic_boundary_conditions())
@@ -431,6 +450,9 @@ void Particle::ParticleInteractionSPH::evaluate_interactions()
   neighborpairs_->evaluate_neighbor_pairs();
   if (peridynamics_) neighborpairs_pd_->evaluate_neighbor_pairs();
 
+  // clear forces on boundary particles (accumulated by the momentum and peridynamic handlers)
+  if (peridynamics_) peridynamics_->clear_boundary_forces();
+
   // init relative positions of virtual particles
   if (virtualwallparticle_)
     virtualwallparticle_->init_relative_positions_of_virtual_particles(max_interaction_distance());
@@ -467,6 +489,60 @@ void Particle::ParticleInteractionSPH::evaluate_interactions()
 
   // add peridynamic interaction contribution to acceleration field
   if (peridynamics_) peridynamics_->add_acceleration_contribution();
+
+  // resultant force on boundary particles
+  if (writeboundaryforce_) evaluate_boundary_force_output();
+}
+
+void Particle::ParticleInteractionSPH::evaluate_boundary_force_output()
+{
+  // forces on the boundary particles owned by this processor
+  std::vector<double> force_dbc_funct, force_other;
+  peridynamics_->sum_boundary_forces(force_dbc_funct, force_other);
+
+  // time integral since the last output (the sum over processors is taken at output)
+  for (int dim = 0; dim < 3; ++dim)
+  {
+    boundaryimpulse_dbc_funct_[dim] += dt_ * force_dbc_funct[dim];
+    boundaryimpulse_other_[dim] += dt_ * force_other[dim];
+  }
+  boundaryimpulsetime_ += dt_;
+
+  if (not particleinteractionwriter_->get_current_write_result_flag()) return;
+
+  const std::vector<double> global_force_dbc_funct =
+      Core::Communication::sum_all(force_dbc_funct, comm_);
+  const std::vector<double> global_force_other = Core::Communication::sum_all(force_other, comm_);
+  std::vector<double> mean_force_dbc_funct =
+      Core::Communication::sum_all(boundaryimpulse_dbc_funct_, comm_);
+  std::vector<double> mean_force_other =
+      Core::Communication::sum_all(boundaryimpulse_other_, comm_);
+
+  // mean force over the time since the last output (the initial evaluation has zero step size)
+  if (boundaryimpulsetime_ > 0.0)
+  {
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      mean_force_dbc_funct[dim] /= boundaryimpulsetime_;
+      mean_force_other[dim] /= boundaryimpulsetime_;
+    }
+  }
+  else
+  {
+    mean_force_dbc_funct = global_force_dbc_funct;
+    mean_force_other = global_force_other;
+  }
+
+  Core::IO::RuntimeCsvWriter* runtime_csv_writer =
+      particleinteractionwriter_->get_specific_runtime_csv_writer("boundary-force");
+  runtime_csv_writer->append_data_vector("force_dbc_funct", global_force_dbc_funct);
+  runtime_csv_writer->append_data_vector("mean_force_dbc_funct", mean_force_dbc_funct);
+  runtime_csv_writer->append_data_vector("force_other", global_force_other);
+  runtime_csv_writer->append_data_vector("mean_force_other", mean_force_other);
+
+  boundaryimpulse_dbc_funct_.assign(3, 0.0);
+  boundaryimpulse_other_.assign(3, 0.0);
+  boundaryimpulsetime_ = 0.0;
 }
 
 void Particle::ParticleInteractionSPH::post_evaluate_time_step(

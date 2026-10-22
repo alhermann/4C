@@ -177,6 +177,11 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
           Particle::State::CriticalStretch, Particle::State::InitialConnectedBonds,
           Particle::State::CurrentConnectedBonds, Particle::State::PDDamageVariable});
     }
+    else if (typeIt.first == Particle::Type::BoundaryPhase)
+    {
+      // force on boundary particles: reaction of the fluid and of PD contact (output only)
+      typeIt.second.insert(Particle::State::Force);
+    }
   }
 }
 
@@ -421,9 +426,6 @@ void Particle::SPHPeridynamic::compute_interaction_forces() const
   }
 
   const PDParticlePairData& pd_neighbor_pairs = neighborpairs_pd_->get_ref_to_particle_pair_data();
-  if (!pd_neighbor_pairs.empty())
-    Core::IO::cout << "Number of pd_neighbor_pairs in peridynamic evaluation on this proc: "
-                   << pd_neighbor_pairs.size() << Core::IO::endl;
   for (const auto& particlepair : pd_neighbor_pairs)
   {
     // access values of local index tuples of particle i and j
@@ -711,5 +713,45 @@ namespace
     return true;
   }
 }  // namespace
+
+void Particle::SPHPeridynamic::clear_boundary_forces() const
+{
+  if (not particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))
+    return;
+
+  particlecontainerbundle_
+      ->get_specific_container(Particle::Type::BoundaryPhase, Particle::Status::Owned)
+      ->clear_state(Particle::State::Force);
+}
+
+void Particle::SPHPeridynamic::sum_boundary_forces(
+    std::vector<double>& force_dbc_funct, std::vector<double>& force_other) const
+{
+  force_dbc_funct.assign(3, 0.0);
+  force_other.assign(3, 0.0);
+
+  if (not particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))
+    return;
+
+  Particle::ParticleContainer* container = particlecontainerbundle_->get_specific_container(
+      Particle::Type::BoundaryPhase, Particle::Status::Owned);
+
+  const int particlestored = container->particles_stored();
+  if (particlestored <= 0) return;
+
+  const int statedim = container->get_state_dim(Particle::State::Force);
+  const double* force = container->get_ptr_to_state(Particle::State::Force, 0);
+  const double* funct_id =
+      container->have_stored_state(Particle::State::DirichletFunctionId)
+          ? container->get_ptr_to_state(Particle::State::DirichletFunctionId, 0)
+          : nullptr;
+
+  for (int i = 0; i < particlestored; ++i)
+  {
+    std::vector<double>& sum =
+        (funct_id and static_cast<int>(funct_id[i]) > 0) ? force_dbc_funct : force_other;
+    for (int dim = 0; dim < statedim; ++dim) sum[dim] += force[statedim * i + dim];
+  }
+}
 
 FOUR_C_NAMESPACE_CLOSE

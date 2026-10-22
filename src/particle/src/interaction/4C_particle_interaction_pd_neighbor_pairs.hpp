@@ -49,6 +49,7 @@ namespace Particle
 {
   using PDParticlePairData = std::vector<Particle::PDParticlePair>;
   using PDParticleWallPairData = std::vector<Particle::PDParticleWallPair>;
+  using PDContactCandidateData = std::vector<Particle::PDContactCandidate>;
 }  // namespace Particle
 
 /*---------------------------------------------------------------------------*
@@ -71,6 +72,19 @@ namespace Particle
     {
       return particlepairdata_;
     };
+
+    //! collect non-bonded particle pairs with a gap below the skin as contact candidates in each
+    //! evaluation of the particle pairs (multi-rate integration; skin <= 0: no candidates)
+    void set_contact_candidate_skin(const double skin) { contact_candidate_skin_ = skin; }
+
+    //! contact candidates of the last evaluation of the particle pairs
+    inline const PDContactCandidateData& get_ref_to_contact_candidates() const
+    {
+      return contactcandidates_;
+    }
+
+    //! true once the particle pairs were evaluated (bond list resolved, contact candidates set)
+    inline bool have_evaluated_particle_pairs() const { return haveevaluatedparticlepairs_; }
 
     //! set pd bond list
     void set_bond_list(const std::shared_ptr<
@@ -122,6 +136,15 @@ namespace Particle
 
     //! particle-wall pair data with evaluated quantities
     PDParticleWallPairData particlewallpairdata_;
+
+    //! contact candidates (non-bonded particle pairs with a gap below the skin)
+    PDContactCandidateData contactcandidates_;
+
+    //! skin of the contact candidates
+    double contact_candidate_skin_ = 0.0;
+
+    //! flag indicating an evaluation of the particle pairs
+    bool haveevaluatedparticlepairs_ = false;
 
     //! interface to particle engine
     std::shared_ptr<Particle::ParticleEngineInterface> particleengineinterface_;

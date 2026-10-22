@@ -157,7 +157,7 @@ void Particle::ParticleInteractionSPH::setup(
         particleengineinterface, particlewallinterface, particleinteractionwriter_, neighborpairs_);
 
   // setup peridynamic handler
-  if (peridynamics_) peridynamics_->setup(particleengineinterface, particlematerial_);
+  if (peridynamics_) peridynamics_->setup(particleengineinterface, particlematerial_, comm_);
 
   // PD particles act as boundary particles of the fluid; since SPH particle pairs exist only within
   // the smaller of both radii, a PD radius below the fluid kernel support weakens the coupling
@@ -514,6 +514,17 @@ void Particle::ParticleInteractionSPH::evaluate_interactions()
   if (writeboundaryforce_) evaluate_boundary_force_output();
 }
 
+void Particle::ParticleInteractionSPH::integrate_substeps(const std::vector<double>& gravity)
+{
+  if (peridynamics_ and peridynamics_->pd_substeps() > 1)
+    peridynamics_->integrate_substeps(dt_, gravity);
+}
+
+void Particle::ParticleInteractionSPH::complete_substeps()
+{
+  if (peridynamics_ and peridynamics_->pd_substeps() > 1) peridynamics_->complete_substeps(dt_);
+}
+
 void Particle::ParticleInteractionSPH::evaluate_boundary_force_output()
 {
   // forces on the boundary particles owned by this processor
@@ -527,6 +538,18 @@ void Particle::ParticleInteractionSPH::evaluate_boundary_force_output()
     boundaryimpulse_other_[dim] += dt_ * force_other[dim];
   }
   boundaryimpulsetime_ += dt_;
+
+  // multi-rate integration: contact forces of the substeps
+  if (peridynamics_->pd_substeps() > 1)
+  {
+    std::vector<double> correction_dbc_funct, correction_other;
+    peridynamics_->take_boundary_impulse_correction(dt_, correction_dbc_funct, correction_other);
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      boundaryimpulse_dbc_funct_[dim] += correction_dbc_funct[dim];
+      boundaryimpulse_other_[dim] += correction_other[dim];
+    }
+  }
 
   if (not particleinteractionwriter_->get_current_write_result_flag()) return;
 

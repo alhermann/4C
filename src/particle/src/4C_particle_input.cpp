@@ -633,6 +633,16 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                               "time-averaged since the last output) to a csv file",
                   .default_value = false}),
 
+          // multi-rate time integration of the peridynamic phase
+          parameter<int>("PD_SUBSTEPS",
+              {.description =
+                      "number of velocity Verlet substeps of the peridynamic phase per time step "
+                      "(bond, contact, gravity and damping forces); the force of the fluid on the "
+                      "PD particles is applied as half kicks at the ends of the time step "
+                      "(impulse multiple time stepping); 1 = single rate",
+                  .default_value = 1,
+                  .validator = positive<int>()}),
+
           // peridynamic dimension
           parameter<PeridynamicDimension>(
               "PD_DIMENSION", {.description = "dimension of peridynamic problem",

@@ -154,6 +154,10 @@ namespace Particle
     //! set of particle types to integrate in time
     std::set<Particle::Type> typestointegrate_;
 
+    //! set of particle types integrated in substeps by the interaction handler (multi-rate
+    //! integration); kinematic constraints apply, the velocity Verlet updates are skipped
+    std::set<Particle::Type> typessubstepped_;
+
     //! current time
     double time_;
 

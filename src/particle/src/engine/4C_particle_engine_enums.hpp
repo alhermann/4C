@@ -100,7 +100,10 @@ namespace Particle
     DirichletFunctionId,    //!< per-particle Dirichlet function id (0 = no BC, N = follow FUNCT N)
     /*---------------------------------------------------------------------------*/
     // particle states for open boundaries
-    OpenBoundaryId  //!< open boundary id
+    OpenBoundaryId,  //!< open boundary id
+    /*---------------------------------------------------------------------------*/
+    // particle states for multi-rate integration of peridynamic particles
+    CouplingForce  //!< force of the fluid on a pd particle at the last evaluation
     /*---------------------------------------------------------------------------*/
   };
 

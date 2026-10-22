@@ -111,6 +111,7 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
 
   // clear particle pair data
   particlepairdata_.clear();
+  contactcandidates_.clear();
 
   // recreate list of hash keys for pd bond pairs
   setup_peridynamic_pair_hashes();
@@ -194,6 +195,11 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
     // gap calculation based on initial spacing
     const double gap = absdist - peridynamic_grid_spacing_;
 
+    // contact candidates of the substeps of the multi-rate integration
+    if (contact_candidate_skin_ > 0.0 and gap < contact_candidate_skin_)
+      contactcandidates_.push_back(
+          {potentialneighbors.first, potentialneighbors.second, globalid_i[0], globalid_j[0]});
+
     // neighboring particles within interaction distance
     if (gap < 0.0)
     {
@@ -254,6 +260,8 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
 
     ++iter;
   }
+
+  haveevaluatedparticlepairs_ = true;
 }
 
 void Particle::PDNeighborPairs::setup_peridynamic_pair_hashes()

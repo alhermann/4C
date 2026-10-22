@@ -87,6 +87,12 @@ namespace Particle
     //! evaluate particle interactions
     void evaluate_interactions() override;
 
+    //! multi-rate integration of the peridynamic phase: substeps from t_n to t_n+1
+    void integrate_substeps(const std::vector<double>& gravity) override;
+
+    //! multi-rate integration of the peridynamic phase: closing half kick at t_n+1
+    void complete_substeps() override;
+
     //! post evaluate time step
     void post_evaluate_time_step(
         std::vector<Particle::ParticleTypeToType>& particlesfromphasetophase) override;

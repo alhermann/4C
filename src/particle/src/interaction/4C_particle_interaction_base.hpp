@@ -80,6 +80,13 @@ namespace Particle
     //! evaluate particle interactions
     virtual void evaluate_interactions() = 0;
 
+    //! multi-rate integration: substeps of particle phases with a smaller stable time step after
+    //! the pre-interaction routine of the time integration (default: none)
+    virtual void integrate_substeps(const std::vector<double>& gravity) {}
+
+    //! multi-rate integration: completion after the post-interaction routine (default: none)
+    virtual void complete_substeps() {}
+
     //! post evaluate time step
     virtual void post_evaluate_time_step(
         std::vector<Particle::ParticleTypeToType>& particlesfromphasetophase) = 0;

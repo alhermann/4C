@@ -266,6 +266,14 @@ void Particle::ParticleAlgorithm::integrate_time_step()
   // time integration scheme specific pre-interaction routine
   particletimint_->pre_interaction_routine();
 
+  // multi-rate integration: substeps of particle phases with a smaller stable time step
+  if (particleinteraction_)
+  {
+    std::vector<double> scaled_gravity(3, 0.0);
+    if (particlegravity_) particlegravity_->get_gravity_acceleration(time(), scaled_gravity);
+    particleinteraction_->integrate_substeps(scaled_gravity);
+  }
+
   // update connectivity
   update_connectivity();
 
@@ -274,6 +282,9 @@ void Particle::ParticleAlgorithm::integrate_time_step()
 
   // time integration scheme specific post-interaction routine
   particletimint_->post_interaction_routine();
+
+  // multi-rate integration: completion of the substeps
+  if (particleinteraction_) particleinteraction_->complete_substeps();
 }
 
 void Particle::ParticleAlgorithm::post_evaluate_time_step()

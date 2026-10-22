@@ -81,6 +81,22 @@ void Particle::TimInt::setup(
   for (auto& type : particlecontainerbundle->get_particle_types())
     if (not typesexludedfromtimeintegration.contains(type)) typestointegrate_.insert(type);
 
+  // multi-rate integration: peridynamic phase integrated in substeps by the interaction handler
+  if (particlecontainerbundle->get_particle_types().contains(Particle::Type::PDPhase) and
+      params_.isSublist("PD") and params_.sublist("PD").isParameter("PD_SUBSTEPS") and
+      params_.sublist("PD").get<int>("PD_SUBSTEPS") > 1)
+  {
+    // (particles with a per-particle Dirichlet function keep their prescribed state of t_n+1 in
+    // the substeps)
+    if (dirichletboundarycondition_ and
+        dirichletboundarycondition_->get_particle_types_subjected_to_dirichlet_bc_set().contains(
+            Particle::Type::PDPhase))
+      FOUR_C_THROW(
+          "PD_SUBSTEPS > 1 is not available for a Dirichlet condition of the whole PD phase!");
+
+    typessubstepped_.insert(Particle::Type::PDPhase);
+  }
+
   // set constraints handler
   constraints_ = constraints;
 }
@@ -241,6 +257,9 @@ void Particle::TimIntSemiImplicitEuler::setup(
   // call base class setup
   Particle::TimInt::setup(particleengineinterface, particlerigidbodyinterface);
 
+  if (not typessubstepped_.empty())
+    FOUR_C_THROW("PD_SUBSTEPS > 1 requires the velocity Verlet time integration scheme!");
+
   // get particle container bundle
   Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
@@ -376,6 +395,9 @@ void Particle::TimIntVelocityVerlet::pre_interaction_routine()
   // iterate over particle types
   for (auto& particleType : typestointegrate_)
   {
+    // particle types integrated in substeps by the interaction handler
+    if (typessubstepped_.contains(particleType)) continue;
+
     // get container of owned particles of current particle type
     Particle::ParticleContainer* container =
         particlecontainerbundle->get_specific_container(particleType, Particle::Status::Owned);
@@ -458,6 +480,9 @@ void Particle::TimIntVelocityVerlet::post_interaction_routine()
   // iterate over particle types
   for (auto& particleType : typestointegrate_)
   {
+    // particle types integrated in substeps by the interaction handler
+    if (typessubstepped_.contains(particleType)) continue;
+
     // get container of owned particles of current particle type
     Particle::ParticleContainer* container =
         particlecontainerbundle->get_specific_container(particleType, Particle::Status::Owned);

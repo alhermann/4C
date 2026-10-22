@@ -40,6 +40,19 @@ namespace Particle
     double e_ji_[3];
   };
 
+  //! close, non-bonded particle pair that may come into contact within the next time step
+  //! (contact candidates of the substeps of the multi-rate integration)
+  struct PDContactCandidate final
+  {
+    //! local index tuple of particles i and j
+    Particle::LocalIndexTuple tuple_i_;
+    Particle::LocalIndexTuple tuple_j_;
+
+    //! global ids of particles i and j (validity check of the local indices)
+    int globalid_i_;
+    int globalid_j_;
+  };
+
   //! struct to store quantities of interacting particles and wall elements
   struct PDParticleWallPair final
   {

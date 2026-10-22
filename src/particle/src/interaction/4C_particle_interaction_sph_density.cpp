@@ -373,11 +373,21 @@ void Particle::SPHDensityBase::sum_colorfield_particle_contribution() const
       colorfield_j =
           container_j->try_get_ptr_to_state_writable(Particle::State::Colorfield, particle_j);
 
+    // volume of the neighboring particles; a neighbor without a density state (boundary, rigid or
+    // PD particle) stands for fluid and contributes the initial volume of the particle it is summed
+    // for, consistent with the density summation and the momentum equation
+    const double V_j = container_j->have_stored_state(Particle::State::Density)
+                           ? mass_j[0] / dens_j[0]
+                           : mass_i[0] / material_i->initDensity_;
+    const double V_i = container_i->have_stored_state(Particle::State::Density)
+                           ? mass_i[0] / dens_i[0]
+                           : mass_j[0] / material_j->initDensity_;
+
     // sum contribution of neighboring particle j
-    if (colorfield_i) colorfield_i[0] += (particlepair.Wij_ / dens_j[0]) * mass_j[0];
+    if (colorfield_i) colorfield_i[0] += particlepair.Wij_ * V_j;
 
     // sum contribution of neighboring particle i
-    if (colorfield_j) colorfield_j[0] += (particlepair.Wji_ / dens_i[0]) * mass_i[0];
+    if (colorfield_j) colorfield_j[0] += particlepair.Wji_ * V_i;
   }
 }
 
@@ -553,13 +563,19 @@ void Particle::SPHDensityBase::continuity_equation_particle_contribution() const
 
     const double e_ij_vel_ij = ParticleUtils::vec_dot(particlepair.e_ij_, vel_ij);
 
+    // volume of the neighboring particles (see sum_colorfield_particle_contribution)
+    const double V_j = container_j->have_stored_state(Particle::State::Density)
+                           ? mass_j[0] / dens_j[0]
+                           : mass_i[0] / material_i->initDensity_;
+    const double V_i = container_i->have_stored_state(Particle::State::Density)
+                           ? mass_i[0] / dens_i[0]
+                           : mass_j[0] / material_j->initDensity_;
+
     // sum contribution of neighboring particle j
-    if (densdot_i)
-      densdot_i[0] += dens_i[0] * (mass_j[0] / dens_j[0]) * particlepair.dWdrij_ * e_ij_vel_ij;
+    if (densdot_i) densdot_i[0] += dens_i[0] * V_j * particlepair.dWdrij_ * e_ij_vel_ij;
 
     // sum contribution of neighboring particle i
-    if (densdot_j)
-      densdot_j[0] += dens_j[0] * (mass_i[0] / dens_i[0]) * particlepair.dWdrji_ * e_ij_vel_ij;
+    if (densdot_j) densdot_j[0] += dens_j[0] * V_i * particlepair.dWdrji_ * e_ij_vel_ij;
   }
 }
 

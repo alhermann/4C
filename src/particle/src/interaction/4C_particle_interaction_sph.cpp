@@ -159,6 +159,26 @@ void Particle::ParticleInteractionSPH::setup(
   // setup peridynamic handler
   if (peridynamics_) peridynamics_->setup(particleengineinterface, particlematerial_);
 
+  // PD particles act as boundary particles of the fluid; since SPH particle pairs exist only within
+  // the smaller of both radii, a PD radius below the fluid kernel support weakens the coupling
+  if (peridynamics_ and
+      particlecontainerbundle_->get_particle_types().contains(Particle::Type::PDPhase))
+  {
+    const double pd_radius =
+        particlematerial_->get_ptr_to_particle_mat_parameter(Particle::Type::PDPhase)->initRadius_;
+    for (const auto fluid_type : {Particle::Type::Phase1, Particle::Type::Phase2})
+    {
+      if (not particlecontainerbundle_->get_particle_types().contains(fluid_type)) continue;
+      const double fluid_radius =
+          particlematerial_->get_ptr_to_particle_mat_parameter(fluid_type)->initRadius_;
+      if (pd_radius < fluid_radius and myrank_ == 0)
+        Core::IO::cout << "Warning: INITRADIUS of the PD material (" << pd_radius
+                       << ") is smaller than INITRADIUS (kernel support) of the fluid material ("
+                       << fluid_radius << "): fluid and PD particles interact only within "
+                       << pd_radius << "!" << Core::IO::endl;
+    }
+  }
+
   // runtime csv output of the resultant force on boundary particles
   if (peridynamics_ and params_.sublist("PD").get<bool>("WRITE_BOUNDARY_FORCE") and
       particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))

@@ -633,6 +633,15 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                               "time-averaged since the last output) to a csv file",
                   .default_value = false}),
 
+          // surface correction of the bond stiffness
+          parameter<bool>("SURFACE_CORRECTION",
+              {.description =
+                      "energy-based surface correction of the bond stiffness (Madenci and Oterkus "
+                      "2014): per particle and coordinate direction the ratio of the strain energy "
+                      "density of a uniform extension in the bulk continuum and in the truncated "
+                      "discrete neighborhood, combined per bond along its direction",
+                  .default_value = false}),
+
           // multi-rate time integration of the peridynamic phase
           parameter<int>("PD_SUBSTEPS",
               {.description =

@@ -103,7 +103,10 @@ namespace Particle
     OpenBoundaryId,  //!< open boundary id
     /*---------------------------------------------------------------------------*/
     // particle states for multi-rate integration of peridynamic particles
-    CouplingForce  //!< force of the fluid on a pd particle at the last evaluation
+    CouplingForce,  //!< force of the fluid on a pd particle at the last evaluation
+    /*---------------------------------------------------------------------------*/
+    // particle states for the surface correction of peridynamic bonds
+    PDSurfaceCorrection  //!< surface correction factors of a pd particle per coordinate direction
     /*---------------------------------------------------------------------------*/
   };
 

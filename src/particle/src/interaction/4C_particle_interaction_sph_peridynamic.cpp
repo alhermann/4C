@@ -54,6 +54,7 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
       damp_(particle_params.sublist("PD").get<double>("NORMAL_DAMP")),
       peridynamic_dimension_(Teuchos::getIntegralValue<Particle::PeridynamicDimension>(
           particle_params.sublist("PD"), "PD_DIMENSION")),
+      surface_correction_(particle_params.sublist("PD").get<bool>("SURFACE_CORRECTION")),
       pd_substeps_(particle_params.sublist("PD").get<int>("PD_SUBSTEPS")),
       viscdampfac_(particle_params.get<double>("VISCOUS_DAMPING")),
       contact_candidate_skin_(0.1 * dx_pd_)
@@ -193,6 +194,9 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
 
       // force of the fluid on the PD particles for the half kicks of the multi-rate integration
       if (pd_substeps_ > 1) particlestates.insert(Particle::State::CouplingForce);
+
+      // surface correction factors
+      if (surface_correction_) particlestates.insert(Particle::State::PDSurfaceCorrection);
     }
     else if (typeIt.first == Particle::Type::BoundaryPhase)
     {
@@ -216,6 +220,35 @@ void Particle::SPHPeridynamic::init_peridynamic_bondlist()
   // important: bin size must be large enough to cover at least peridynamic horizon
   const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
+
+  // surface correction: micromodulus for E = 1, particle volume and the strain energy density of a
+  // unit uniaxial extension in the bulk continuum (bond-based: 3/5 E in 3D and plane strain with
+  // nu = 1/4, 9/16 E in plane stress with nu = 1/3)
+  double unit_micromodulus = 0.0, volume = 0.0, bulk_energy = 0.0;
+  switch (peridynamic_dimension_)
+  {
+    case PeridynamicDimension::Peridynamic_3D:
+      unit_micromodulus = 12.0 / (std::numbers::pi * std::pow(horizon_pd_, 4));
+      volume = dx_pd_ * dx_pd_ * dx_pd_;
+      bulk_energy = 3.0 / 5.0;
+      break;
+    case PeridynamicDimension::Peridynamic_2DPlaneStress:
+      unit_micromodulus = 9.0 / (std::numbers::pi * std::pow(horizon_pd_, 3));
+      volume = dx_pd_ * dx_pd_;
+      bulk_energy = 9.0 / 16.0;
+      break;
+    case PeridynamicDimension::Peridynamic_2DPlaneStrain:
+      unit_micromodulus = 48.0 / (std::numbers::pi * 5.0 * std::pow(horizon_pd_, 3));
+      volume = dx_pd_ * dx_pd_;
+      bulk_energy = 3.0 / 5.0;
+      break;
+    default:
+      std23::unreachable();
+  }
+  if (surface_correction_)
+    particlecontainerbundle
+        ->get_specific_container(Particle::Type::PDPhase, Particle::Status::Owned)
+        ->clear_state(Particle::State::PDSurfaceCorrection);
   // iterate over potential particle neighbors
   for (const auto& potentialneighbors :
       particleengineinterface_->get_potential_particle_neighbors())
@@ -279,6 +312,25 @@ void Particle::SPHPeridynamic::init_peridynamic_bondlist()
         initialconnectedbonds_i[0] += 1.0;
         initialconnectedbonds_j[0] += 1.0;
 
+        // surface correction: strain energy density of a unit extension in each coordinate
+        // direction, sum over the full neighborhood (including pre-cracked bonds)
+        if (surface_correction_)
+        {
+          double* energy_i = container_i->get_ptr_to_state_writable(
+              Particle::State::PDSurfaceCorrection, particle_i);
+          double* energy_j = container_j->get_ptr_to_state_writable(
+              Particle::State::PDSurfaceCorrection, particle_j);
+          const double beta = calculate_volume_correction_factor(absdist);
+          for (int dim = 0; dim < 3; ++dim)
+          {
+            const double stretch = (r_ji[dim] * r_ji[dim]) / (absdist * absdist);
+            const double energy =
+                0.25 * unit_micromodulus * beta * stretch * stretch * absdist * volume;
+            energy_i[dim] += energy;
+            energy_j[dim] += energy;
+          }
+        }
+
         // bonds crossing a pre-crack are initially broken
         if (bond_crosses_pre_crack(pos_i, pos_j)) continue;
 
@@ -303,6 +355,55 @@ void Particle::SPHPeridynamic::init_peridynamic_bondlist()
 
   Core::IO::cout << "Number of initialized peridynamic bonds on this proc: " << bondlist_->size()
                  << Core::IO::endl;
+
+  // surface correction factors: ratio of the bulk continuum and the discrete strain energy density
+  if (surface_correction_)
+  {
+    Particle::ParticleContainer* container = particlecontainerbundle->get_specific_container(
+        Particle::Type::PDPhase, Particle::Status::Owned);
+    const int particlestored = container->particles_stored();
+    const int planar = (peridynamic_dimension_ == PeridynamicDimension::Peridynamic_3D) ? 3 : 2;
+    double minfactor = std::numeric_limits<double>::max(), maxfactor = 0.0;
+    for (int i = 0; i < particlestored; ++i)
+    {
+      double* correction =
+          container->get_ptr_to_state_writable(Particle::State::PDSurfaceCorrection, i);
+      for (int dim = 0; dim < 3; ++dim)
+      {
+        // out-of-plane direction of 2D problems and particles without bonds: no correction
+        correction[dim] =
+            (dim < planar and correction[dim] > 0.0) ? bulk_energy / correction[dim] : 1.0;
+        if (dim < planar)
+        {
+          minfactor = std::min(minfactor, correction[dim]);
+          maxfactor = std::max(maxfactor, correction[dim]);
+        }
+      }
+    }
+    minfactor = Core::Communication::min_all(minfactor, comm_);
+    maxfactor = Core::Communication::max_all(maxfactor, comm_);
+    if (Core::Communication::my_mpi_rank(comm_) == 0)
+      Core::IO::cout << "PD surface correction factors between " << minfactor << " and "
+                     << maxfactor << Core::IO::endl;
+
+    // correction factors of ghosted particles
+    particleengineinterface_->refresh_particles_of_specific_states_and_types(
+        {{Particle::Type::PDPhase, {Particle::State::PDSurfaceCorrection}}});
+  }
+}
+
+double Particle::SPHPeridynamic::calculate_surface_correction_factor(const double* correction_i,
+    const double* correction_j, const double* xi, const double xi_norm) const
+{
+  double sum = 0.0;
+  for (int dim = 0; dim < 3; ++dim)
+  {
+    if (xi[dim] == 0.0) continue;
+    const double n = xi[dim] / xi_norm;
+    const double g = 0.5 * (correction_i[dim] + correction_j[dim]);
+    sum += (n / g) * (n / g);
+  }
+  return 1.0 / std::sqrt(sum);
 }
 
 void Particle::SPHPeridynamic::add_acceleration_contribution()
@@ -499,6 +600,13 @@ void Particle::SPHPeridynamic::compute_bond_forces() const
         default:
           std23::unreachable();
       }
+
+      // surface correction of the bond stiffness
+      if (surface_correction_)
+        fac *= calculate_surface_correction_factor(
+            container_i->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_i),
+            container_j->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_j), xi,
+            xi_norm);
 
       // add bond force contribution
       ParticleUtils::vec_add_scale(force_i, fac, m);
@@ -1163,8 +1271,12 @@ void Particle::SPHPeridynamic::check_substep_stability(const double dt) const
     const double young =
         0.5 * (container_i->get_ptr_to_state(Particle::State::Young, particle_i)[0] +
                   container_j->get_ptr_to_state(Particle::State::Young, particle_j)[0]);
-    const double k =
-        stiffness_factor * young * calculate_volume_correction_factor(xi_norm) / xi_norm;
+    double k = stiffness_factor * young * calculate_volume_correction_factor(xi_norm) / xi_norm;
+    if (surface_correction_)
+      k *= calculate_surface_correction_factor(
+          container_i->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_i),
+          container_j->get_ptr_to_state(Particle::State::PDSurfaceCorrection, particle_j), xi,
+          xi_norm);
 
     const double* x = xi;
     const double s = k / (xi_norm * xi_norm);

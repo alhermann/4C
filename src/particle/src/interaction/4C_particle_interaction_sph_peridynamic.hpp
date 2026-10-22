@@ -107,6 +107,11 @@ namespace Particle
     //! calculate peridynamic volume correction factor
     double calculate_volume_correction_factor(double xi) const;
 
+    //! bond factor of the surface correction: [sum_d (n_d / g_d)^2]^(-1/2) with the mean g_d of the
+    //! correction factors of both particles and the bond direction n (1 without surface correction)
+    double calculate_surface_correction_factor(const double* correction_i,
+        const double* correction_j, const double* xi, double xi_norm) const;
+
     //! calculate force for rigid phase
     void compute_interaction_forces();
 
@@ -162,6 +167,9 @@ namespace Particle
 
     //! peridynamic dimension
     const PeridynamicDimension peridynamic_dimension_;
+
+    //! energy-based surface correction of the bond stiffness
+    const bool surface_correction_;
 
     //! number of velocity Verlet substeps of the peridynamic phase per time step
     const int pd_substeps_;

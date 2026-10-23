@@ -51,6 +51,15 @@ Particle::ParticleEngine::ParticleEngine(MPI_Comm comm, const Teuchos::Parameter
       validglobalidtolocalindex_(false),
       validdirectghosting_(false)
 {
+  // dynamic load balancing: cut directions and criteria of the recursive coordinate bisection
+  const std::string cutdirections = params_.get<std::string>("DYNLOADBAL_CUT_DIRECTIONS");
+  if (cutdirections.empty() or cutdirections.find_first_not_of("xyz") != std::string::npos)
+    FOUR_C_THROW("DYNLOADBAL_CUT_DIRECTIONS '{}' must consist of x, y, z!", cutdirections);
+  for (int dim = 0; dim < 3; ++dim)
+    loadbalancecutdirections_[dim] = (cutdirections.find("xyz"[dim]) != std::string::npos);
+  loadbalanceseparatepd_ = params_.get<bool>("DYNLOADBAL_SEPARATE_PD_WEIGHT");
+  loadbalancenorm_ = params_.get<int>("DYNLOADBAL_MULTICRITERIA_NORM");
+
   // init binning strategy
   init_binning_strategy();
 
@@ -63,6 +72,10 @@ Particle::ParticleEngine::~ParticleEngine() = default;
 void Particle::ParticleEngine::setup(
     const std::map<Particle::Type, std::set<Particle::State>>& particlestatestotypes)
 {
+  // a separate PD criterion without PD particles would balance the number of bins instead
+  if (loadbalanceseparatepd_ and not particlestatestotypes.contains(Particle::Type::PDPhase))
+    FOUR_C_THROW("DYNLOADBAL_SEPARATE_PD_WEIGHT requires PD particles (pdphase)!");
+
   // setup binning strategy
   setup_binning_strategy();
 
@@ -381,8 +394,8 @@ void Particle::ParticleEngine::dynamic_load_balancing()
   determine_bin_weights();
 
   // distribute bins via recursive coordinate bisection
-  binning_->binstrategy_->distribute_bins_recurs_coord_bisection(
-      binning_->binrowmap_, binning_->bincenters_, binning_->binweights_);
+  binning_->binstrategy_->distribute_bins_recurs_coord_bisection(binning_->binrowmap_,
+      binning_->bincenters_, binning_->binweights_, loadbalanceseparatepd_ ? loadbalancenorm_ : 0);
 
   // export elements to new layout
   binning_->binstrategy_->bin_discret()->export_row_elements(*binning_->binrowmap_);
@@ -558,8 +571,14 @@ void Particle::ParticleEngine::build_particle_to_particle_neighbors()
                   std::make_tuple(neighbortype, neighborstatus, neighborindex)));
 
           // accumulate interaction cost for load balancing weight estimation, weighted by the
-          // average of the dynamic load balance factors of the two interacting particle types
-          bin_interaction_costs_[gidofbin] +=
+          // average of the dynamic load balance factors of the two interacting particle types;
+          // pairs of PD particles with PD and boundary particles form the second criterion if the
+          // PD work is balanced separately
+          const bool pd_i = (type == Particle::Type::PDPhase);
+          const bool pd_j = (neighbortype == Particle::Type::PDPhase);
+          const bool pdpair = (pd_i and (pd_j or neighbortype == Particle::Type::BoundaryPhase)) or
+                              (pd_j and type == Particle::Type::BoundaryPhase);
+          bin_interaction_costs_[gidofbin][(loadbalanceseparatepd_ and pdpair) ? 1 : 0] +=
               0.5 *
               (typeweights_[static_cast<int>(type)] + typeweights_[static_cast<int>(neighbortype)]);
         }
@@ -923,18 +942,23 @@ void Particle::ParticleEngine::setup_binning_strategy()
   // initialize vector for storage of bin center coordinates and bin weights
   binning_->bincenters_ =
       std::make_shared<Core::LinAlg::MultiVector<double>>(*binning_->binrowmap_, 3);
-  binning_->binweights_ =
-      std::make_shared<Core::LinAlg::MultiVector<double>>(*binning_->binrowmap_, 1);
+  binning_->binweights_ = std::make_shared<Core::LinAlg::MultiVector<double>>(
+      *binning_->binrowmap_, loadbalanceseparatepd_ ? 2 : 1);
 
   // get all bin centers needed for repartitioning
   binning_->binstrategy_->get_all_bin_centers(*binning_->binrowmap_, *binning_->bincenters_);
+
+  // directions that are not cut: the same coordinate for all bins (the bin centers are only used
+  // for the repartitioning), e.g. columns of bins along z for DYNLOADBAL_CUT_DIRECTIONS xy
+  for (int dim = 0; dim < 3; ++dim)
+    if (not loadbalancecutdirections_[dim]) binning_->bincenters_->get_vector(dim).put_scalar(0.0);
 
   // initialize weights of all bins
   binning_->binweights_->put_scalar(1.0e-05);
 
   // distribute bins via recursive coordinate bisection
-  binning_->binstrategy_->distribute_bins_recurs_coord_bisection(
-      binning_->binrowmap_, binning_->bincenters_, binning_->binweights_);
+  binning_->binstrategy_->distribute_bins_recurs_coord_bisection(binning_->binrowmap_,
+      binning_->bincenters_, binning_->binweights_, loadbalanceseparatepd_ ? loadbalancenorm_ : 0);
 
   // create bins and fill bins into binning discretization
   binning_->binstrategy_->fill_bins_into_bin_discretization(*binning_->binrowmap_);
@@ -2114,13 +2138,18 @@ void Particle::ParticleEngine::determine_bin_weights()
     auto costIt = bin_interaction_costs_.find(gidofbin);
     if (costIt != bin_interaction_costs_.end())
     {
-      binning_->binweights_->get_vector(0).get_values()[rowlidofbin] += costIt->second;
+      for (int c = 0; c < binning_->binweights_->num_vectors(); ++c)
+        binning_->binweights_->get_vector(c).get_values()[rowlidofbin] += costIt->second[c];
     }
     else
     {
       for (const auto& particleIt : particlestobins_[binning_->bincolmap_->lid(gidofbin)])
-        binning_->binweights_->get_vector(0).get_values()[rowlidofbin] +=
+      {
+        const int c =
+            (loadbalanceseparatepd_ and particleIt.first == Particle::Type::PDPhase) ? 1 : 0;
+        binning_->binweights_->get_vector(c).get_values()[rowlidofbin] +=
             typeweights_[static_cast<int>(particleIt.first)];
+      }
     }
   }
 }

@@ -138,7 +138,10 @@ Core::Rebalance::rebalance_coordinates(const Core::LinAlg::MultiVector<double>& 
   for (int weight_num = 0; weight_num < initialWeights.num_vectors(); weight_num++)
     weights[weight_num] = initialWeights.get_vector(weight_num).get_values();
 
-  std::vector<int> stride(initialWeights.num_vectors(), initialWeights.num_vectors());
+  // each weight vector is stored contiguously (column-major multivector): weight n of element k
+  // at weights[n][k], i.e. stride 1 (a stride of num_vectors reads past the end for several
+  // weights)
+  std::vector<int> stride(initialWeights.num_vectors(), 1);
 
   VectorAdapter adapter(
       Teuchos::rcpFromRef(initialCoordinates.get_epetra_multi_vector()), weights, stride);

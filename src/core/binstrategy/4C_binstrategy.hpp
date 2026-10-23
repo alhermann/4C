@@ -443,11 +443,14 @@ namespace Core::Binstrategy
      *
      * \param[in] binrowmap bin row map
      * \param[in] bincenters positions of centers of bins
-     * \param[in] binweights weights that is assigned to each bin
+     * \param[in] binweights weights that is assigned to each bin (one column per criterion)
+     * \param[in] multicriteria_norm norm combining several criteria (Zoltan
+     *            RCB_MULTICRITERIA_NORM 1, 2 or 3; 0: Zoltan default)
      */
     void distribute_bins_recurs_coord_bisection(std::shared_ptr<Core::LinAlg::Map>& binrowmap,
         std::shared_ptr<Core::LinAlg::MultiVector<double>>& bincenters,
-        std::shared_ptr<Core::LinAlg::MultiVector<double>>& binweights) const;
+        std::shared_ptr<Core::LinAlg::MultiVector<double>>& binweights,
+        int multicriteria_norm = 0) const;
 
     /*!
      * \brief fill bins into bin discretization

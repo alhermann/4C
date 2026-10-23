@@ -816,7 +816,7 @@ void Core::Binstrategy::BinningStrategy::write_bin_output(int const step, double
 void Core::Binstrategy::BinningStrategy::distribute_bins_recurs_coord_bisection(
     std::shared_ptr<Core::LinAlg::Map>& binrowmap,
     std::shared_ptr<Core::LinAlg::MultiVector<double>>& bincenters,
-    std::shared_ptr<Core::LinAlg::MultiVector<double>>& binweights) const
+    std::shared_ptr<Core::LinAlg::MultiVector<double>>& binweights, int multicriteria_norm) const
 {
   // create a parameter list for partitioner
   Teuchos::ParameterList params;
@@ -829,6 +829,8 @@ void Core::Binstrategy::BinningStrategy::distribute_bins_recurs_coord_bisection(
   zparams.set("LB_METHOD", "RCB");
   zparams.set("RCB_OUTPUT_LEVEL", "0");
   zparams.set("RCB_RECTILINEAR_BLOCKS", "1");
+  if (multicriteria_norm > 0 and binweights->num_vectors() > 1)
+    zparams.set("RCB_MULTICRITERIA_NORM", std::to_string(multicriteria_norm));
 
   std::tie(bincenters, binweights) =
       Core::Rebalance::rebalance_coordinates(*bincenters, params, *binweights);

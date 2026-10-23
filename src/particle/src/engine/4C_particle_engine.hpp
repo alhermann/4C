@@ -19,6 +19,7 @@
 #include "4C_particle_engine_interface.hpp"
 #include "4C_utils_parameter_list.fwd.hpp"
 
+#include <array>
 #include <map>
 
 FOUR_C_NAMESPACE_OPEN
@@ -744,7 +745,18 @@ namespace Particle
     PotentialParticleNeighbors potentialparticleneighbors_;
 
     //! accumulated interaction pair count per bin global id for load balancing weight estimation
-    std::unordered_map<int, double> bin_interaction_costs_;
+    //! (component 1: pairs of PD particles with PD and boundary particles if the PD work is a
+    //! separate criterion, component 0: all other pairs)
+    std::unordered_map<int, std::array<double, 2>> bin_interaction_costs_;
+
+    //! coordinate directions cut by the recursive coordinate bisection of the bins
+    std::array<bool, 3> loadbalancecutdirections_ = {true, true, true};
+
+    //! weight the PD work as a separate criterion (two bin weights)
+    bool loadbalanceseparatepd_ = false;
+
+    //! norm of the multicriteria recursive coordinate bisection
+    int loadbalancenorm_ = 1;
 
     //! owned particles being communicated (transfered/distributed) to target processors
     std::vector<std::vector<int>> communicatedparticletargets_;

@@ -90,6 +90,30 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "considered particle phases with dynamic load balance weighting factor",
                   .default_value = "none"}),
 
+          // coordinate directions of the cuts of the recursive coordinate bisection of the bins
+          parameter<std::string>("DYNLOADBAL_CUT_DIRECTIONS",
+              {.description = "coordinate directions in which the bins are cut by the recursive "
+                              "coordinate bisection of the dynamic load balancing (any of x, y, "
+                              "z); xy partitions shallow domains into columns along z",
+                  .default_value = "xyz"}),
+
+          // PD work as a separate criterion of the dynamic load balancing
+          parameter<bool>("DYNLOADBAL_SEPARATE_PD_WEIGHT",
+              {.description = "weight the work of PD particles (pairs of PD particles with PD and "
+                              "boundary particles) as a second criterion of the dynamic load "
+                              "balancing (multicriteria recursive coordinate bisection: the cuts "
+                              "balance the sum of both normalized criteria, the norm decides the "
+                              "cut directions)",
+                  .default_value = false}),
+
+          // norm of the multicriteria recursive coordinate bisection
+          parameter<int>("DYNLOADBAL_MULTICRITERIA_NORM",
+              {.description = "norm combining the criteria of DYNLOADBAL_SEPARATE_PD_WEIGHT in the "
+                              "recursive coordinate bisection (Zoltan RCB_MULTICRITERIA_NORM: 1, 2 "
+                              "or 3 = max norm, which favours the worse balanced criterion)",
+                  .default_value = 1,
+                  .validator = in_range(1, 3)}),
+
           // relate particle phase to material id
           parameter<std::string>("PHASE_TO_MATERIAL_ID",
               {.description = "relate particle phase to material id", .default_value = "none"}),

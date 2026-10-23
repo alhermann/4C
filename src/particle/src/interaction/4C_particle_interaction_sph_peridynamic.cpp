@@ -356,6 +356,8 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
   // calculate the bond forces
   compute_bond_forces();
 
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::contact_forces");
+
   const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
 
@@ -426,6 +428,8 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
 
 void Particle::SPHPeridynamic::compute_bond_forces() const
 {
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_bond_forces");
+
   if (surface_correction_ and not checkedsurfacecorrection_)
   {
     check_surface_correction_factors();
@@ -603,6 +607,8 @@ void Particle::SPHPeridynamic::compute_acceleration() const
 
 void Particle::SPHPeridynamic::damage_evaluation()
 {
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::damage_evaluation");
+
   // get particle container bundle
   Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
@@ -1082,6 +1088,8 @@ void Particle::SPHPeridynamic::take_boundary_impulse_correction(
 
 void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weight)
 {
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_substep_contact_forces");
+
   for (const auto& candidate : neighborpairs_pd_->get_ref_to_contact_candidates())
   {
     // access values of local index tuples of particle i and j

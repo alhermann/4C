@@ -110,7 +110,10 @@ namespace Particle
                           //!< micromoduli)
     /*---------------------------------------------------------------------------*/
     // particle states for multi-rate integration of peridynamic particles (continued)
-    SubstepVelocity  //!< velocity of a pd particle after the substeps (until the closing kick)
+    SubstepVelocity,  //!< velocity of a pd particle after the substeps (until the closing kick)
+    /*---------------------------------------------------------------------------*/
+    // particle states for the contact of peridynamic particles with boundary particles
+    BoundaryContactNormal  //!< outward surface normal of a boundary particle (pd contact)
     /*---------------------------------------------------------------------------*/
   };
 

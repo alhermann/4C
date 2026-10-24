@@ -674,6 +674,17 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "volumes",
                   .default_value = false}),
 
+          // direction of the contact force between PD and boundary particles
+          parameter<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL",
+              {.description =
+                      "the contact force between a PD particle and a boundary particle acts along "
+                      "the outward surface normal of the boundary (computed once from the "
+                      "boundary particle distribution; translating structures only) instead of "
+                      "the line between the particle centres, so that PD bodies slide without "
+                      "friction along discretized (staircase) boundary surfaces; the magnitude is "
+                      "unchanged",
+                  .default_value = false}),
+
           // multi-rate time integration of the peridynamic phase
           parameter<int>("PD_SUBSTEPS",
               {.description =

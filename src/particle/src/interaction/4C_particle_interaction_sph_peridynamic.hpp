@@ -110,6 +110,16 @@ namespace Particle
     //! check that every owned PD particle has a positive surface correction factor
     void check_surface_correction_factors() const;
 
+    //! outward surface normals of the boundary particles for the contact with PD particles (once)
+    void compute_boundary_contact_normals();
+
+    //! direction of the contact force of a pair (from particle i to j): the line between the
+    //! particle centres or, for PD-boundary pairs, the boundary surface normal
+    void contact_direction(const Particle::Type type_i,
+        const Particle::ParticleContainer* container_i, const int particle_i,
+        const Particle::Type type_j, const Particle::ParticleContainer* container_j,
+        const int particle_j, const double* e_ji, double* e) const;
+
     //! calculate force for rigid phase
     void compute_interaction_forces();
 
@@ -180,6 +190,12 @@ namespace Particle
 
     //! skin of the contact candidates of the substeps
     const double contact_candidate_skin_;
+
+    //! contact force between PD and boundary particles along the boundary surface normal
+    const bool boundary_contact_normal_;
+
+    //! flag indicating the computation of the boundary surface normals
+    bool computedboundarynormals_ = false;
 
     //! flag indicating the stability check of the multi-rate integration
     bool checkedsubstepstability_ = false;

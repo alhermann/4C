@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iostream>
 #include <limits>
 #include <numbers>
 
@@ -57,7 +58,9 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
       surface_correction_(particle_params.sublist("PD").get<bool>("SURFACE_CORRECTION")),
       pd_substeps_(particle_params.sublist("PD").get<int>("PD_SUBSTEPS")),
       viscdampfac_(particle_params.get<double>("VISCOUS_DAMPING")),
-      contact_candidate_skin_(0.1 * dx_pd_)
+      contact_candidate_skin_(0.1 * dx_pd_),
+      boundary_contact_normal_(
+          particle_params.sublist("PD").get<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL"))
 {
   FOUR_C_ASSERT_ALWAYS(not particle_params.get<bool>("RIGID_BODY_MOTION"),
       "Peridynamic interaction is not available in combination with rigid body motion!");
@@ -203,6 +206,9 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
     {
       // force on boundary particles: reaction of the fluid and of PD contact (output only)
       typeIt.second.insert(Particle::State::Force);
+
+      // outward surface normal for the contact with PD particles
+      if (boundary_contact_normal_) typeIt.second.insert(Particle::State::BoundaryContactNormal);
     }
   }
 }
@@ -358,6 +364,8 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
 
   TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::contact_forces");
 
+  if (boundary_contact_normal_ and not computedboundarynormals_) compute_boundary_contact_normals();
+
   const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
 
@@ -401,27 +409,32 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
     if (status_j == Particle::Status::Owned)
       force_j = container_j->try_get_ptr_to_state_writable(Particle::State::Force, particle_j);
 
+    // direction of the contact force (from i to j)
+    double e[3];
+    contact_direction(
+        type_i, container_i, particle_i, type_j, container_j, particle_j, particlepair.e_ji_, e);
+
     // compute normal gap and rate of normal gap
     const double gap = particlepair.gap_;
-    const double gapdot = -1.0 * (ParticleUtils::vec_dot(vel_i, particlepair.e_ji_) -
-                                     ParticleUtils::vec_dot(vel_j, particlepair.e_ji_));
+    const double gapdot =
+        -1.0 * (ParticleUtils::vec_dot(vel_i, e) - ParticleUtils::vec_dot(vel_j, e));
 
     // magnitude of peridynamic particle contact force
     const double fac = std::min(0.0, (stiff_ * gap + damp_ * gapdot));
 
     // add contributions
-    if (force_i) ParticleUtils::vec_add_scale(force_i, fac, particlepair.e_ji_);
-    if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, particlepair.e_ji_);
+    if (force_i) ParticleUtils::vec_add_scale(force_i, fac, e);
+    if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, e);
 
     // multi-rate integration: contact force on owned boundary particles
     if (pd_substeps_ > 1)
     {
       if (type_i == Particle::Type::BoundaryPhase and status_i == Particle::Status::Owned)
-        add_boundary_contact_force(container_i, particle_i, fac, particlepair.e_ji_, 1.0,
-            contactforce_dbc_funct_, contactforce_other_);
+        add_boundary_contact_force(
+            container_i, particle_i, fac, e, 1.0, contactforce_dbc_funct_, contactforce_other_);
       if (type_j == Particle::Type::BoundaryPhase and status_j == Particle::Status::Owned)
-        add_boundary_contact_force(container_j, particle_j, -fac, particlepair.e_ji_, 1.0,
-            contactforce_dbc_funct_, contactforce_other_);
+        add_boundary_contact_force(
+            container_j, particle_j, -fac, e, 1.0, contactforce_dbc_funct_, contactforce_other_);
     }
   }
 }
@@ -1090,6 +1103,8 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
 {
   TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_substep_contact_forces");
 
+  if (boundary_contact_normal_ and not computedboundarynormals_) compute_boundary_contact_normals();
+
   for (const auto& candidate : neighborpairs_pd_->get_ref_to_contact_candidates())
   {
     // access values of local index tuples of particle i and j
@@ -1129,9 +1144,11 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
     const double gap = absdist - dx_pd_;
     if (gap >= 0.0) continue;
 
-    // versor from particle i to j
+    // versor from particle i to j and direction of the contact force
     double e_ji[3];
     ParticleUtils::vec_set_scale(e_ji, 1.0 / absdist, r_ji);
+    double e[3];
+    contact_direction(type_i, container_i, particle_i, type_j, container_j, particle_j, e_ji, e);
 
     // rate of normal gap
     double gapdot = 0.0;
@@ -1139,7 +1156,7 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
     {
       const double* vel_i = container_i->get_ptr_to_state(Particle::State::Velocity, particle_i);
       const double* vel_j = container_j->get_ptr_to_state(Particle::State::Velocity, particle_j);
-      gapdot = -1.0 * (ParticleUtils::vec_dot(vel_i, e_ji) - ParticleUtils::vec_dot(vel_j, e_ji));
+      gapdot = -1.0 * (ParticleUtils::vec_dot(vel_i, e) - ParticleUtils::vec_dot(vel_j, e));
     }
 
     // magnitude of peridynamic particle contact force
@@ -1152,19 +1169,135 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
     if (status_j == Particle::Status::Owned)
       force_j = container_j->try_get_ptr_to_state_writable(Particle::State::Force, particle_j);
 
-    if (force_i) ParticleUtils::vec_add_scale(force_i, fac, e_ji);
-    if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, e_ji);
+    if (force_i) ParticleUtils::vec_add_scale(force_i, fac, e);
+    if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, e);
 
     // contact impulse on owned boundary particles for the boundary force output
     if (type_i == Particle::Type::BoundaryPhase and status_i == Particle::Status::Owned)
-      add_boundary_contact_force(container_i, particle_i, fac, e_ji, weight,
+      add_boundary_contact_force(container_i, particle_i, fac, e, weight,
           substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
     if (type_j == Particle::Type::BoundaryPhase and status_j == Particle::Status::Owned)
-      add_boundary_contact_force(container_j, particle_j, -fac, e_ji, weight,
+      add_boundary_contact_force(container_j, particle_j, -fac, e, weight,
           substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
   }
 
   // (the force state of boundary particles is cleared before the evaluation at t_n+1)
+}
+
+void Particle::SPHPeridynamic::compute_boundary_contact_normals()
+{
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_boundary_contact_normals");
+
+  // no boundary particles: nothing to do (the particle types are the same on all processors)
+  computedboundarynormals_ = true;
+  if (not particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))
+    return;
+
+  // outward normal of a boundary particle: opposite to the weighted sum of the distance vectors to
+  // its boundary neighbours within the horizon (a colour-function gradient); interior particles of
+  // thick or solid structures get no normal (vanishing sum) and keep the centre line direction
+  Particle::ParticleContainer* container = particlecontainerbundle_->get_specific_container(
+      Particle::Type::BoundaryPhase, Particle::Status::Owned);
+  const int particlestored = container->particles_stored();
+  container->clear_state(Particle::State::BoundaryContactNormal);
+  std::vector<double> sumdist(particlestored, 0.0);
+
+  for (const auto& potentialneighbors :
+      particleengineinterface_->get_potential_particle_neighbors())
+  {
+    Particle::Type type_i;
+    Particle::Status status_i;
+    int particle_i;
+    std::tie(type_i, status_i, particle_i) = potentialneighbors.first;
+
+    Particle::Type type_j;
+    Particle::Status status_j;
+    int particle_j;
+    std::tie(type_j, status_j, particle_j) = potentialneighbors.second;
+
+    if (type_i != Particle::Type::BoundaryPhase or type_j != Particle::Type::BoundaryPhase)
+      continue;
+
+    const Particle::ParticleContainer* container_i =
+        particlecontainerbundle_->get_specific_container(type_i, status_i);
+    const Particle::ParticleContainer* container_j =
+        particlecontainerbundle_->get_specific_container(type_j, status_j);
+
+    const double* pos_i = container_i->get_ptr_to_state(Particle::State::Position, particle_i);
+    const double* pos_j = container_j->get_ptr_to_state(Particle::State::Position, particle_j);
+
+    double r_ji[3];
+    particleengineinterface_->distance_between_particles(pos_i, pos_j, r_ji);
+    const double absdist = ParticleUtils::vec_norm_two(r_ji);
+    if (absdist >= horizon_pd_) continue;
+    const double w = 1.0 - absdist / horizon_pd_;
+
+    if (status_i == Particle::Status::Owned)
+    {
+      ParticleUtils::vec_add_scale(
+          container->get_ptr_to_state_writable(Particle::State::BoundaryContactNormal, particle_i),
+          -w, r_ji);
+      sumdist[particle_i] += w * absdist;
+    }
+    if (status_j == Particle::Status::Owned)
+    {
+      ParticleUtils::vec_add_scale(
+          container->get_ptr_to_state_writable(Particle::State::BoundaryContactNormal, particle_j),
+          w, r_ji);
+      sumdist[particle_j] += w * absdist;
+    }
+  }
+
+  int numwithnormal = 0;
+  for (int i = 0; i < particlestored; ++i)
+  {
+    double* normal =
+        container->get_ptr_to_state_writable(Particle::State::BoundaryContactNormal, i);
+    const double norm = ParticleUtils::vec_norm_two(normal);
+    // a one-sided neighbourhood (surface): |sum| is a sizeable part of the summed distances
+    if (norm > 0.1 * sumdist[i] and norm > 0.0)
+    {
+      ParticleUtils::vec_scale(normal, 1.0 / norm);
+      ++numwithnormal;
+    }
+    else
+      ParticleUtils::vec_clear(normal);
+  }
+
+  // number of boundary particles with a surface normal (once, for checking the structure surfaces)
+  const int globalwithnormal = Core::Communication::sum_all(numwithnormal, comm_);
+  const int globalstored = Core::Communication::sum_all(particlestored, comm_);
+  if (Core::Communication::my_mpi_rank(comm_) == 0)
+    std::cout << "PD contact: " << globalwithnormal << " of " << globalstored
+              << " boundary particles have a surface normal" << std::endl;
+
+  // ghosted boundary particles (contact pairs with ghosted boundary particles)
+  particleengineinterface_->refresh_particles_of_specific_states_and_types(
+      {{Particle::Type::BoundaryPhase, {Particle::State::BoundaryContactNormal}}});
+}
+
+void Particle::SPHPeridynamic::contact_direction(const Particle::Type type_i,
+    const Particle::ParticleContainer* container_i, const int particle_i,
+    const Particle::Type type_j, const Particle::ParticleContainer* container_j,
+    const int particle_j, const double* e_ji, double* e) const
+{
+  ParticleUtils::vec_set(e, e_ji);
+  if (not boundary_contact_normal_) return;
+
+  // the PD particle is pushed along the outward normal of the boundary particle: e (from i to j)
+  // is the negative normal of a boundary particle j and the normal of a boundary particle i
+  const double* normal = nullptr;
+  double sign = 1.0;
+  if (type_j == Particle::Type::BoundaryPhase and type_i == Particle::Type::PDPhase)
+  {
+    normal = container_j->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_j);
+    sign = -1.0;
+  }
+  else if (type_i == Particle::Type::BoundaryPhase and type_j == Particle::Type::PDPhase)
+    normal = container_i->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_i);
+
+  if (normal and ParticleUtils::vec_norm_two(normal) > 0.5)
+    ParticleUtils::vec_set_scale(e, sign, normal);
 }
 
 void Particle::SPHPeridynamic::add_boundary_contact_force(const ParticleContainer* container,

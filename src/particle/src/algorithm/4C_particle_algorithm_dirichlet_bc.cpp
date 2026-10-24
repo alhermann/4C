@@ -17,6 +17,8 @@
 #include "4C_utils_function.hpp"
 #include "4C_utils_parameter_list.hpp"
 
+#include <array>
+
 FOUR_C_NAMESPACE_OPEN
 
 /*---------------------------------------------------------------------------*
@@ -33,6 +35,9 @@ Particle::DirichletBoundaryConditionHandler::DirichletBoundaryConditionHandler(
   // read parameters relating particle types to values
   ParticleUtils::read_params_types_related_to_values(
       params_conditions, "DIRICHLET_BOUNDARY_CONDITION", dirichlet_bc_type_to_funct_id_);
+
+  // Dirichlet functions depending on time only
+  functtimeonly_ = params_conditions.get<bool>("DIRICHLET_FUNCT_TIME_ONLY");
 
   // iterate over particle types and insert into set
   for (const auto& type_iter : dirichlet_bc_type_to_funct_id_)
@@ -133,17 +138,38 @@ void Particle::DirichletBoundaryConditionHandler::evaluate_dirichlet_boundary_co
   // init vector containing evaluated function and derivatives
   std::vector<double> funct_time_deriv(deg + 1);
 
+  // functions depending on time only: function value and time derivatives once per function and
+  // spatial dimension (evaluated at the origin)
+  std::map<int, std::vector<std::vector<double>>> timeonlyvalues;
+  std::map<const Core::Utils::FunctionOfSpaceTime*, int> functiontoid;
+  if (functtimeonly_)
+  {
+    const std::array<double, 3> origin = {0.0, 0.0, 0.0};
+    for (const auto& [funct_id, function] : per_particle_function_cache_)
+    {
+      functiontoid[function] = funct_id;
+      std::vector<std::vector<double>>& values = timeonlyvalues[funct_id];
+      for (int dim = 0; dim < static_cast<int>(function->number_components()); ++dim)
+        values.push_back(function->evaluate_time_derivative(origin, evaltime, deg, dim));
+    }
+  }
+
   // local lambda to apply Dirichlet BC of a single function to a single particle (usage see below)
   auto apply_dbc_to_particle = [&](const Core::Utils::FunctionOfSpaceTime& function, const int i,
                                    const double* refpos, double* pos, double* vel, double* acc)
   {
     const int statedim = static_cast<int>(function.number_components());
+    const std::vector<std::vector<double>>* cached =
+        functtimeonly_ ? &timeonlyvalues.at(functiontoid.at(&function)) : nullptr;
     // iterate over spatial dimension
     for (int dim = 0; dim < statedim; ++dim)
     {
       // evaluate function, first and second time derivative
-      funct_time_deriv = function.evaluate_time_derivative(
-          std::span(&(refpos[statedim * i]), 3), evaltime, deg, dim);
+      if (cached)
+        funct_time_deriv = (*cached)[dim];
+      else
+        funct_time_deriv = function.evaluate_time_derivative(
+            std::span(&(refpos[statedim * i]), 3), evaltime, deg, dim);
 
       // set position state
       if (evalpos)

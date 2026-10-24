@@ -133,6 +133,9 @@ namespace Particle
 
     //! cache of per-particle Dirichlet functions, keyed by function id
     mutable std::map<int, const Core::Utils::FunctionOfSpaceTime*> per_particle_function_cache_;
+
+    //! the Dirichlet functions depend on time only (evaluated once per function and evaluation)
+    bool functtimeonly_ = false;
   };
 
 }  // namespace Particle

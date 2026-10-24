@@ -236,6 +236,13 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                   .default_value = "none"}),
 
 
+          // Dirichlet functions depending on time only
+          parameter<bool>("DIRICHLET_FUNCT_TIME_ONLY",
+              {.description = "the Dirichlet functions (per particle type and per particle) depend "
+                              "on time only, e.g. a translating structure: each function is "
+                              "evaluated once per evaluation instead of once per particle",
+                  .default_value = false}),
+
           // particle types that may carry a per-particle Dirichlet function id
           parameter<std::optional<std::vector<std::string>>>("DIRICHLET_BOUNDARY_CONDITION_FLAGGED",
               {.description = "Particle type names for which individual particles may carry a "

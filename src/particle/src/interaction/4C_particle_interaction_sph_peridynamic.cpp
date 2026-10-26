@@ -60,8 +60,17 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
       viscdampfac_(particle_params.get<double>("VISCOUS_DAMPING")),
       contact_candidate_skin_(0.1 * dx_pd_),
       boundary_contact_normal_(
-          particle_params.sublist("PD").get<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL"))
+          particle_params.sublist("PD").get<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL")),
+      friction_pd_(particle_params.sublist("PD").get<double>("FRICTION_COEFF")),
+      friction_boundary_(particle_params.sublist("PD").get<double>("FRICTION_COEFF_BOUNDARY")),
+      friction_damp_(particle_params.sublist("PD").get<double>("FRICTION_TANGENTIAL_DAMP"))
 {
+  FOUR_C_ASSERT_ALWAYS(friction_pd_ >= 0.0 and friction_boundary_ >= 0.0 and friction_damp_ >= 0.0,
+      "PD contact: FRICTION_COEFF, FRICTION_COEFF_BOUNDARY and FRICTION_TANGENTIAL_DAMP must not "
+      "be negative!");
+  FOUR_C_ASSERT_ALWAYS((friction_pd_ == 0.0 and friction_boundary_ == 0.0) or friction_damp_ > 0.0,
+      "PD contact: Coulomb friction requires FRICTION_TANGENTIAL_DAMP > 0 (regularization)!");
+
   FOUR_C_ASSERT_ALWAYS(not particle_params.get<bool>("RIGID_BODY_MOTION"),
       "Peridynamic interaction is not available in combination with rigid body motion!");
 
@@ -422,19 +431,40 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
     // magnitude of peridynamic particle contact force
     const double fac = std::min(0.0, (stiff_ * gap + damp_ * gapdot));
 
+    // regularized Coulomb friction force on particle i (none without friction)
+    double f_t[3];
+    const bool friction = friction_force(type_i, type_j, vel_i, vel_j, e, fac, f_t);
+
     // add contributions
     if (force_i) ParticleUtils::vec_add_scale(force_i, fac, e);
     if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, e);
+    if (friction)
+    {
+      if (force_i) ParticleUtils::vec_add(force_i, f_t);
+      if (force_j) ParticleUtils::vec_sub(force_j, f_t);
+    }
 
     // multi-rate integration: contact force on owned boundary particles
     if (pd_substeps_ > 1)
     {
+      double f_t_j[3];
+      ParticleUtils::vec_set_scale(f_t_j, -1.0, f_t);
       if (type_i == Particle::Type::BoundaryPhase and status_i == Particle::Status::Owned)
+      {
         add_boundary_contact_force(
             container_i, particle_i, fac, e, 1.0, contactforce_dbc_funct_, contactforce_other_);
+        if (friction)
+          add_boundary_force_vector(
+              container_i, particle_i, f_t, 1.0, contactforce_dbc_funct_, contactforce_other_);
+      }
       if (type_j == Particle::Type::BoundaryPhase and status_j == Particle::Status::Owned)
+      {
         add_boundary_contact_force(
             container_j, particle_j, -fac, e, 1.0, contactforce_dbc_funct_, contactforce_other_);
+        if (friction)
+          add_boundary_force_vector(
+              container_j, particle_j, f_t_j, 1.0, contactforce_dbc_funct_, contactforce_other_);
+      }
     }
   }
 }
@@ -883,13 +913,21 @@ void Particle::SPHPeridynamic::integrate_substeps(
       particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase);
 
   // ghosted boundary particles at t_n+1 (structures moved by Dirichlet functions)
+  // (and their velocities for the contact damping and friction)
   if (haveboundary)
-    particleengineinterface_->refresh_particles_of_specific_states_and_types(
-        {{Particle::Type::BoundaryPhase, {Particle::State::Position}}});
+  {
+    if (damp_ != 0.0 or friction_pd_ > 0.0 or friction_boundary_ > 0.0)
+      particleengineinterface_->refresh_particles_of_specific_states_and_types(
+          {{Particle::Type::BoundaryPhase,
+              {Particle::State::Position, Particle::State::Velocity}}});
+    else
+      particleengineinterface_->refresh_particles_of_specific_states_and_types(
+          {{Particle::Type::BoundaryPhase, {Particle::State::Position}}});
+  }
 
   // states of ghosted PD particles needed for the force evaluation of a substep
   StatesOfTypesToRefresh pdstatestorefresh;
-  if (damp_ != 0.0)
+  if (damp_ != 0.0 or friction_pd_ > 0.0 or friction_boundary_ > 0.0)
     pdstatestorefresh.push_back(
         {Particle::Type::PDPhase, {Particle::State::Position, Particle::State::Velocity}});
   else
@@ -1151,16 +1189,24 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
     contact_direction(type_i, container_i, particle_i, type_j, container_j, particle_j, e_ji, e);
 
     // rate of normal gap
+    const bool needvelocity = (damp_ != 0.0 or friction_pd_ > 0.0 or friction_boundary_ > 0.0);
+    const double* vel_i = needvelocity
+                              ? container_i->get_ptr_to_state(Particle::State::Velocity, particle_i)
+                              : nullptr;
+    const double* vel_j = needvelocity
+                              ? container_j->get_ptr_to_state(Particle::State::Velocity, particle_j)
+                              : nullptr;
     double gapdot = 0.0;
     if (damp_ != 0.0)
-    {
-      const double* vel_i = container_i->get_ptr_to_state(Particle::State::Velocity, particle_i);
-      const double* vel_j = container_j->get_ptr_to_state(Particle::State::Velocity, particle_j);
       gapdot = -1.0 * (ParticleUtils::vec_dot(vel_i, e) - ParticleUtils::vec_dot(vel_j, e));
-    }
 
     // magnitude of peridynamic particle contact force
     const double fac = std::min(0.0, (stiff_ * gap + damp_ * gapdot));
+
+    // regularized Coulomb friction force on particle i (none without friction)
+    double f_t[3] = {0.0, 0.0, 0.0};
+    const bool friction =
+        needvelocity and friction_force(type_i, type_j, vel_i, vel_j, e, fac, f_t);
 
     // add contributions
     double* force_i =
@@ -1171,14 +1217,31 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
 
     if (force_i) ParticleUtils::vec_add_scale(force_i, fac, e);
     if (force_j) ParticleUtils::vec_add_scale(force_j, -fac, e);
+    if (friction)
+    {
+      if (force_i) ParticleUtils::vec_add(force_i, f_t);
+      if (force_j) ParticleUtils::vec_sub(force_j, f_t);
+    }
 
     // contact impulse on owned boundary particles for the boundary force output
+    double f_t_j[3];
+    ParticleUtils::vec_set_scale(f_t_j, -1.0, f_t);
     if (type_i == Particle::Type::BoundaryPhase and status_i == Particle::Status::Owned)
+    {
       add_boundary_contact_force(container_i, particle_i, fac, e, weight,
           substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
+      if (friction)
+        add_boundary_force_vector(container_i, particle_i, f_t, weight,
+            substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
+    }
     if (type_j == Particle::Type::BoundaryPhase and status_j == Particle::Status::Owned)
+    {
       add_boundary_contact_force(container_j, particle_j, -fac, e, weight,
           substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
+      if (friction)
+        add_boundary_force_vector(container_j, particle_j, f_t_j, weight,
+            substepcontactimpulse_dbc_funct_, substepcontactimpulse_other_);
+    }
   }
 
   // (the force state of boundary particles is cleared before the evaluation at t_n+1)
@@ -1298,6 +1361,42 @@ void Particle::SPHPeridynamic::contact_direction(const Particle::Type type_i,
 
   if (normal and ParticleUtils::vec_norm_two(normal) > 0.5)
     ParticleUtils::vec_set_scale(e, sign, normal);
+}
+
+bool Particle::SPHPeridynamic::friction_force(const Particle::Type type_i,
+    const Particle::Type type_j, const double* vel_i, const double* vel_j, const double* e,
+    const double fac, double* f_t) const
+{
+  ParticleUtils::vec_clear(f_t);
+  const bool boundary =
+      (type_i == Particle::Type::BoundaryPhase or type_j == Particle::Type::BoundaryPhase);
+  const double mu = boundary ? friction_boundary_ : friction_pd_;
+  if (mu <= 0.0 or fac >= 0.0) return false;
+
+  // tangential relative velocity of particle j with respect to particle i
+  double v_t[3];
+  ParticleUtils::vec_set(v_t, vel_j);
+  ParticleUtils::vec_sub(v_t, vel_i);
+  ParticleUtils::vec_add_scale(v_t, -ParticleUtils::vec_dot(v_t, e), e);
+  const double v_t_norm = ParticleUtils::vec_norm_two(v_t);
+  if (v_t_norm <= 0.0) return false;
+
+  // regularized Coulomb friction on particle i, along the relative motion of j (opposing the
+  // sliding of i relative to j): magnitude min(mu |f_n|, c_t |v_t|)
+  const double magnitude = std::min(mu * (-fac), friction_damp_ * v_t_norm);
+  ParticleUtils::vec_set_scale(f_t, magnitude / v_t_norm, v_t);
+  return true;
+}
+
+void Particle::SPHPeridynamic::add_boundary_force_vector(const ParticleContainer* container,
+    const int particle, const double* force, const double weight,
+    std::vector<double>& sum_dbc_funct, std::vector<double>& sum_other) const
+{
+  const bool dbc_funct = container->have_stored_state(Particle::State::DirichletFunctionId) and
+                         static_cast<int>(container->get_ptr_to_state(
+                             Particle::State::DirichletFunctionId, particle)[0]) > 0;
+  std::vector<double>& sum = dbc_funct ? sum_dbc_funct : sum_other;
+  for (int dim = 0; dim < 3; ++dim) sum[dim] += weight * force[dim];
 }
 
 void Particle::SPHPeridynamic::add_boundary_contact_force(const ParticleContainer* container,
@@ -1459,6 +1558,24 @@ void Particle::SPHPeridynamic::check_substep_stability(const double dt) const
                    << " 1/s, of one contact spring " << omega_contact << " 1/s, of a particle with "
                    << contacts << " contacts " << omega_max << " 1/s: omega h = " << omega_max * h
                    << " (limit " << limit << ")" << Core::IO::endl;
+
+  // explicit stability of the tangential friction regularization: a particle sliding against up to
+  // eight fixed contact partners is damped by 8 c_t; the update is monotonic for 8 c_t h / m <= 1
+  // (stable for free PD partners); the regularization has no true stick: a sustained tangential
+  // load F_t below the Coulomb limit creeps with F_t / c_t
+  if (friction_pd_ > 0.0 or friction_boundary_ > 0.0)
+  {
+    const double ratio = 8.0 * friction_damp_ * h / mass_min;
+    if (Core::Communication::my_mpi_rank(comm_) == 0)
+      Core::IO::cout << "PD contact friction: mu " << friction_pd_ << " (PD), "
+                     << friction_boundary_ << " (boundary), c_t " << friction_damp_
+                     << ": 8 c_t h / m = " << ratio << " (limit 1)" << Core::IO::endl;
+    if (ratio > 1.0)
+      FOUR_C_THROW(
+          "PD contact friction: FRICTION_TANGENTIAL_DAMP {} too large for the substep {} "
+          "(8 c_t h / m = {} > 1); use at most {}!",
+          friction_damp_, h, ratio, mass_min / (8.0 * h));
+  }
 
   if (omega_max * h >= limit)
     FOUR_C_THROW(

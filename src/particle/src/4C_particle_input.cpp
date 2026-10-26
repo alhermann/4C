@@ -681,6 +681,24 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "volumes",
                   .default_value = false}),
 
+          // Coulomb friction of the short-range contact (regularized by a tangential damping)
+          parameter<double>("FRICTION_COEFF",
+              {.description = "Coulomb friction coefficient of the contact between PD particles "
+                              "without an intact bond; the tangential force opposes the tangential "
+                              "relative velocity v_t with magnitude min(mu |f_n|, "
+                              "FRICTION_TANGENTIAL_DAMP |v_t|) (viscous regularization of the "
+                              "stick state); 0 = frictionless",
+                  .default_value = 0.0}),
+          parameter<double>("FRICTION_COEFF_BOUNDARY",
+              {.description = "Coulomb friction coefficient of the contact between PD particles "
+                              "and boundary particles (as FRICTION_COEFF); 0 = frictionless",
+                  .default_value = 0.0}),
+          parameter<double>("FRICTION_TANGENTIAL_DAMP",
+              {.description = "regularization coefficient c_t of the Coulomb friction (tangential "
+                              "force c_t |v_t| below the Coulomb limit); required if a friction "
+                              "coefficient is positive",
+                  .default_value = 0.0}),
+
           // direction of the contact force between PD and boundary particles
           parameter<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL",
               {.description =

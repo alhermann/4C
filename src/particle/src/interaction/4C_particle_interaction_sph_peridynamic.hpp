@@ -113,6 +113,17 @@ namespace Particle
     //! outward surface normals of the boundary particles for the contact with PD particles (once)
     void compute_boundary_contact_normals();
 
+    //! regularized Coulomb friction force on particle i of a contact pair (direction e from i to j,
+    //! normal force factor fac <= 0); returns false (and a zero force) without friction
+    bool friction_force(const Particle::Type type_i, const Particle::Type type_j,
+        const double* vel_i, const double* vel_j, const double* e, const double fac,
+        double* f_t) const;
+
+    //! add a force acting on a boundary particle to the boundary force sums
+    void add_boundary_force_vector(const ParticleContainer* container, int particle,
+        const double* force, double weight, std::vector<double>& sum_dbc_funct,
+        std::vector<double>& sum_other) const;
+
     //! direction of the contact force of a pair (from particle i to j): the line between the
     //! particle centres or, for PD-boundary pairs, the boundary surface normal
     void contact_direction(const Particle::Type type_i,
@@ -193,6 +204,11 @@ namespace Particle
 
     //! contact force between PD and boundary particles along the boundary surface normal
     const bool boundary_contact_normal_;
+
+    //! Coulomb friction coefficients of PD-PD and PD-boundary contact, tangential regularization
+    const double friction_pd_;
+    const double friction_boundary_;
+    const double friction_damp_;
 
     //! flag indicating the computation of the boundary surface normals
     bool computedboundarynormals_ = false;

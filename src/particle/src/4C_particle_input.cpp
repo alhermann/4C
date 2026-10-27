@@ -710,6 +710,25 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "unchanged",
                   .default_value = false}),
 
+          // contact between PD particles and the smooth surface of the boundary particles
+          parameter<bool>("BOUNDARY_CONTACT_SMOOTH_SURFACE",
+              {.description =
+                      "one contact of a PD particle with the boundary: gap g = f - dx with the "
+                      "implicit moving least squares surface f(x) = sum_j W_j (x - x_j).n_j / "
+                      "sum_j W_j of the outermost boundary particles and their outward normals "
+                      "(plane fit of the outermost neighbours within 2 dx; W_j = (1 - |x - x_j|^2 "
+                      "/ R^2)^3 h_j, R = 2 PERIDYNAMIC_GRID_SPACING, visibility h_j fading behind "
+                      "the tangent plane of x_j over dx/2); spring force from the potential "
+                      "phi(S) k g^2 / 2 with a smooth onset phi of the weight sum S = sum_j W_j "
+                      "(conservative, smooth along the surface; sharp convex edges are rounded by "
+                      "~0.3 dx; resists penetrations up to ~1.35 dx), damping and friction along "
+                      "the normal and "
+                      "tangent of the surface; the PD contact reaction is part of the boundary "
+                      "force sums, "
+                      "not of the force state of the boundary particles; translating structures "
+                      "only",
+                  .default_value = false}),
+
           // multi-rate time integration of the peridynamic phase
           parameter<int>("PD_SUBSTEPS",
               {.description =

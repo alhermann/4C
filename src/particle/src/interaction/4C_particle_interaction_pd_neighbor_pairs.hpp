@@ -83,6 +83,18 @@ namespace Particle
       return contactcandidates_;
     }
 
+    //! collect the pairs of an owned PD particle and a boundary particle within the radius (plus
+    //! the skin of the contact candidates) separately for the contact with the smooth boundary
+    //! surface; these pairs are then no regular contact pairs or candidates (radius <= 0: off)
+    void set_boundary_contact_radius(const double radius) { boundary_contact_radius_ = radius; }
+
+    //! pairs of an owned PD particle (particle i) and a boundary particle (particle j) of the last
+    //! evaluation of the particle pairs (contact with the smooth boundary surface)
+    inline const PDContactCandidateData& get_ref_to_boundary_contact_pairs() const
+    {
+      return boundarycontactpairs_;
+    }
+
     //! true once the particle pairs were evaluated (bond list resolved, contact candidates set)
     inline bool have_evaluated_particle_pairs() const { return haveevaluatedparticlepairs_; }
 
@@ -142,6 +154,12 @@ namespace Particle
 
     //! skin of the contact candidates
     double contact_candidate_skin_ = 0.0;
+
+    //! pairs of an owned PD particle and a boundary particle (contact with the smooth surface)
+    PDContactCandidateData boundarycontactpairs_;
+
+    //! radius of the pairs of PD and boundary particles for the smooth boundary surface
+    double boundary_contact_radius_ = 0.0;
 
     //! flag indicating an evaluation of the particle pairs
     bool haveevaluatedparticlepairs_ = false;

@@ -112,6 +112,7 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
   // clear particle pair data
   particlepairdata_.clear();
   contactcandidates_.clear();
+  boundarycontactpairs_.clear();
 
   // recreate list of hash keys for pd bond pairs
   setup_peridynamic_pair_hashes();
@@ -191,6 +192,25 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
     if (absdist < (1.0e-10 * rad_i[0]) or absdist < (1.0e-10 * rad_j[0]))
       FOUR_C_THROW("absolute distance {} between particles close to zero!", absdist);
 #endif
+
+    // contact with the smooth boundary surface: pairs of an owned PD particle (stored as
+    // particle i) and a boundary particle within the radius plus the skin; no regular contact pairs
+    if (boundary_contact_radius_ > 0.0 and
+        (type_i == Particle::Type::BoundaryPhase or type_j == Particle::Type::BoundaryPhase))
+    {
+      const bool pd_is_i = (type_i == Particle::Type::PDPhase);
+      if ((pd_is_i ? status_i : status_j) == Particle::Status::Owned and
+          absdist < boundary_contact_radius_ + contact_candidate_skin_)
+      {
+        if (pd_is_i)
+          boundarycontactpairs_.push_back(
+              {potentialneighbors.first, potentialneighbors.second, globalid_i[0], globalid_j[0]});
+        else
+          boundarycontactpairs_.push_back(
+              {potentialneighbors.second, potentialneighbors.first, globalid_j[0], globalid_i[0]});
+      }
+      continue;
+    }
 
     // gap calculation based on initial spacing
     const double gap = absdist - peridynamic_grid_spacing_;

@@ -41,6 +41,47 @@ namespace
       const double* pos_i, const double* pos_j, const std::array<double, 6>& segment);
   bool bond_aabb_overlaps_patch(
       const double* pos_i, const double* pos_j, const std::array<double, 9>& patch);
+
+  // unit eigenvector of the smallest eigenvalue of the symmetric 3x3 matrix a (a00, a11, a22, a01,
+  // a02, a12); false for points on a line (middle eigenvalue not separated from zero) or an
+  // isotropic or degenerate matrix
+  bool smallest_principal_axis(const std::array<double, 6>& a, double* axis)
+  {
+    const double p1 = a[3] * a[3] + a[4] * a[4] + a[5] * a[5];
+    const double q = (a[0] + a[1] + a[2]) / 3.0;
+    const double p2 =
+        (a[0] - q) * (a[0] - q) + (a[1] - q) * (a[1] - q) + (a[2] - q) * (a[2] - q) + 2.0 * p1;
+    if (p2 <= 0.0) return false;
+    const double p = std::sqrt(p2 / 6.0);
+    const double b00 = (a[0] - q) / p, b11 = (a[1] - q) / p, b22 = (a[2] - q) / p;
+    const double b01 = a[3] / p, b02 = a[4] / p, b12 = a[5] / p;
+    const double detb = b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) +
+                        b02 * (b01 * b12 - b11 * b02);
+    const double phi = std::acos(std::clamp(0.5 * detb, -1.0, 1.0)) / 3.0;
+    const double lmax = q + 2.0 * p * std::cos(phi);
+    const double lmin = q + 2.0 * p * std::cos(phi + 2.0 * std::numbers::pi / 3.0);
+    const double lmid = 3.0 * q - lmax - lmin;
+    if (lmid <= 1.0e-6 * lmax) return false;
+
+    // eigenvector of lmin: largest cross product of two rows of a - lmin I
+    const double r[3][3] = {
+        {a[0] - lmin, a[3], a[4]}, {a[3], a[1] - lmin, a[5]}, {a[4], a[5], a[2] - lmin}};
+    double best = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+      const double* u = r[k];
+      const double* v = r[(k + 1) % 3];
+      const double c[3] = {
+          u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+      const double norm = std::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+      if (norm > best)
+      {
+        best = norm;
+        for (int dim = 0; dim < 3; ++dim) axis[dim] = c[dim] / norm;
+      }
+    }
+    return best > 1.0e-12 * lmax * lmax;
+  }
 }  // namespace
 
 /*---------------------------------------------------------------------------*
@@ -63,7 +104,10 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
           particle_params.sublist("PD").get<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL")),
       friction_pd_(particle_params.sublist("PD").get<double>("FRICTION_COEFF")),
       friction_boundary_(particle_params.sublist("PD").get<double>("FRICTION_COEFF_BOUNDARY")),
-      friction_damp_(particle_params.sublist("PD").get<double>("FRICTION_TANGENTIAL_DAMP"))
+      friction_damp_(particle_params.sublist("PD").get<double>("FRICTION_TANGENTIAL_DAMP")),
+      boundary_contact_smooth_(
+          particle_params.sublist("PD").get<bool>("BOUNDARY_CONTACT_SMOOTH_SURFACE")),
+      smooth_surface_radius_(2.0 * dx_pd_)
 {
   FOUR_C_ASSERT_ALWAYS(friction_pd_ >= 0.0 and friction_boundary_ >= 0.0 and friction_damp_ >= 0.0,
       "PD contact: FRICTION_COEFF, FRICTION_COEFF_BOUNDARY and FRICTION_TANGENTIAL_DAMP must not "
@@ -99,6 +143,10 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
   FOUR_C_ASSERT_ALWAYS(horizon_pd_ * 1.1 < minimum_bin_size,
       "Peridynamic INTERACTION_HORIZON * 1.1(safety factor to account for stretch) must be smaller "
       "than BIN_SIZE_LOWER_BOUND!");
+  FOUR_C_ASSERT_ALWAYS(not boundary_contact_smooth_ or
+                           smooth_surface_radius_ + contact_candidate_skin_ < minimum_bin_size,
+      "BOUNDARY_CONTACT_SMOOTH_SURFACE: the radius 2 PERIDYNAMIC_GRID_SPACING of the smooth "
+      "surface plus the skin of the contact candidates must be smaller than BIN_SIZE_LOWER_BOUND!");
 
   // parse pre-crack line segments (3D): each entry has START and END (3 doubles each)
   {
@@ -167,6 +215,10 @@ void Particle::SPHPeridynamic::init(
   // multi-rate integration: contact candidates for the substeps
   if (pd_substeps_ > 1) neighborpairs_pd->set_contact_candidate_skin(contact_candidate_skin_);
 
+  // contact with the smooth boundary surface: pairs of PD and boundary particles within its radius
+  if (boundary_contact_smooth_)
+    neighborpairs_pd->set_boundary_contact_radius(smooth_surface_radius_);
+
   neighborpairs_pd_ = neighborpairs_pd;
 }
 
@@ -217,7 +269,8 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
       typeIt.second.insert(Particle::State::Force);
 
       // outward surface normal for the contact with PD particles
-      if (boundary_contact_normal_) typeIt.second.insert(Particle::State::BoundaryContactNormal);
+      if (boundary_contact_normal_ or boundary_contact_smooth_)
+        typeIt.second.insert(Particle::State::BoundaryContactNormal);
     }
   }
 }
@@ -373,7 +426,8 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
 
   TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::contact_forces");
 
-  if (boundary_contact_normal_ and not computedboundarynormals_) compute_boundary_contact_normals();
+  if ((boundary_contact_normal_ or boundary_contact_smooth_) and not computedboundarynormals_)
+    compute_boundary_contact_normals();
 
   const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
@@ -467,6 +521,9 @@ void Particle::SPHPeridynamic::compute_interaction_forces()
       }
     }
   }
+
+  // contact of PD particles with the smooth boundary surface
+  if (boundary_contact_smooth_) compute_smooth_boundary_contact_forces(false, 1.0);
 }
 
 void Particle::SPHPeridynamic::compute_bond_forces() const
@@ -864,8 +921,10 @@ void Particle::SPHPeridynamic::clear_boundary_forces() const
 void Particle::SPHPeridynamic::sum_boundary_forces(
     std::vector<double>& force_dbc_funct, std::vector<double>& force_other) const
 {
-  force_dbc_funct.assign(3, 0.0);
-  force_other.assign(3, 0.0);
+  // reaction of the contact with the smooth boundary surface, summed by the owners of the PD
+  // particles (not part of the force state of the boundary particles)
+  force_dbc_funct = smoothcontactforce_dbc_funct_;
+  force_other = smoothcontactforce_other_;
 
   if (not particlecontainerbundle_->get_particle_types().contains(Particle::Type::BoundaryPhase))
     return;
@@ -1141,7 +1200,8 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
 {
   TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_substep_contact_forces");
 
-  if (boundary_contact_normal_ and not computedboundarynormals_) compute_boundary_contact_normals();
+  if ((boundary_contact_normal_ or boundary_contact_smooth_) and not computedboundarynormals_)
+    compute_boundary_contact_normals();
 
   for (const auto& candidate : neighborpairs_pd_->get_ref_to_contact_candidates())
   {
@@ -1244,6 +1304,9 @@ void Particle::SPHPeridynamic::compute_substep_contact_forces(const double weigh
     }
   }
 
+  // contact of PD particles with the smooth boundary surface
+  if (boundary_contact_smooth_) compute_smooth_boundary_contact_forces(true, weight);
+
   // (the force state of boundary particles is cleared before the evaluation at t_n+1)
 }
 
@@ -1327,16 +1390,397 @@ void Particle::SPHPeridynamic::compute_boundary_contact_normals()
       ParticleUtils::vec_clear(normal);
   }
 
+  // smooth boundary surface: only the outermost layer keeps its normal (a boundary particle within
+  // 1.5 dx lying more than dx/2 above a particle along its normal marks an inner layer, whose
+  // tangent plane would lie dx below the surface)
+  if (boundary_contact_smooth_)
+  {
+    std::vector<char> inner(particlestored, 0);
+    for (const auto& potentialneighbors :
+        particleengineinterface_->get_potential_particle_neighbors())
+    {
+      Particle::Type type_i;
+      Particle::Status status_i;
+      int particle_i;
+      std::tie(type_i, status_i, particle_i) = potentialneighbors.first;
+
+      Particle::Type type_j;
+      Particle::Status status_j;
+      int particle_j;
+      std::tie(type_j, status_j, particle_j) = potentialneighbors.second;
+
+      if (type_i != Particle::Type::BoundaryPhase or type_j != Particle::Type::BoundaryPhase)
+        continue;
+
+      const double* pos_i = particlecontainerbundle_->get_specific_container(type_i, status_i)
+                                ->get_ptr_to_state(Particle::State::Position, particle_i);
+      const double* pos_j = particlecontainerbundle_->get_specific_container(type_j, status_j)
+                                ->get_ptr_to_state(Particle::State::Position, particle_j);
+
+      double r_ji[3];
+      particleengineinterface_->distance_between_particles(pos_i, pos_j, r_ji);
+      if (ParticleUtils::vec_norm_two(r_ji) >= 1.5 * dx_pd_) continue;
+
+      if (status_i == Particle::Status::Owned and
+          ParticleUtils::vec_dot(r_ji,
+              container->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_i)) >
+              0.5 * dx_pd_)
+        inner[particle_i] = 1;
+      if (status_j == Particle::Status::Owned and
+          -ParticleUtils::vec_dot(r_ji,
+              container->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_j)) >
+              0.5 * dx_pd_)
+        inner[particle_j] = 1;
+    }
+    for (int i = 0; i < particlestored; ++i)
+    {
+      double* normal =
+          container->get_ptr_to_state_writable(Particle::State::BoundaryContactNormal, i);
+      if (inner[i] and ParticleUtils::vec_norm_two(normal) > 0.5)
+      {
+        ParticleUtils::vec_clear(normal);
+        --numwithnormal;
+      }
+    }
+  }
+
+  // smooth boundary surface: refined normals of the outermost layer from a plane fit of the
+  // outermost particles within 2 dx whose normals agree within 30 degrees (smallest principal axis
+  // of their positions, oriented like the colour-function normal; at least 3 points not on a
+  // line). The colour-function normal is smeared over the horizon: next to a concave corner of two
+  // walls it tilts by ~25 degrees and the tangent planes cut into the corner (a PD particle
+  // touching both walls had a gap of -0.1 dx, i.e. a force of 0.1 k dx at rest). A fit that turns
+  // the normal by more than 30 degrees while the particle lies more than 0.3 dx (in the fitted
+  // plane) from the centroid of its points is rejected: it belongs to a neighbouring face (edge
+  // rows of thin walls, whose own face is too narrow to be included)
+  int numrefined = 0;
+  if (boundary_contact_smooth_)
+  {
+    // normals (and thus outermost flags) of the ghosted boundary particles
+    particleengineinterface_->refresh_particles_of_specific_states_and_types(
+        {{Particle::Type::BoundaryPhase, {Particle::State::BoundaryContactNormal}}});
+
+    constexpr double cos_similar = 0.86602540378443865;
+    const double fitradius = 2.0 * dx_pd_ * (1.0 + 1.0e-6);  // lattice neighbours at 2 dx included
+
+    // points of the fit of each owned outermost particle relative to its position: number (the
+    // particle itself included), sum of r and of r r^T (xx, yy, zz, xy, xz, yz)
+    std::vector<int> npoints(particlestored, 1);
+    std::vector<std::array<double, 9>> moments(particlestored, std::array<double, 9>{});
+    auto add_point = [&](const int i, const double* r)
+    {
+      ++npoints[i];
+      std::array<double, 9>& m = moments[i];
+      for (int dim = 0; dim < 3; ++dim) m[dim] += r[dim];
+      m[3] += r[0] * r[0];
+      m[4] += r[1] * r[1];
+      m[5] += r[2] * r[2];
+      m[6] += r[0] * r[1];
+      m[7] += r[0] * r[2];
+      m[8] += r[1] * r[2];
+    };
+
+    for (const auto& potentialneighbors :
+        particleengineinterface_->get_potential_particle_neighbors())
+    {
+      Particle::Type type_i;
+      Particle::Status status_i;
+      int particle_i;
+      std::tie(type_i, status_i, particle_i) = potentialneighbors.first;
+
+      Particle::Type type_j;
+      Particle::Status status_j;
+      int particle_j;
+      std::tie(type_j, status_j, particle_j) = potentialneighbors.second;
+
+      if (type_i != Particle::Type::BoundaryPhase or type_j != Particle::Type::BoundaryPhase)
+        continue;
+
+      const Particle::ParticleContainer* container_i =
+          particlecontainerbundle_->get_specific_container(type_i, status_i);
+      const Particle::ParticleContainer* container_j =
+          particlecontainerbundle_->get_specific_container(type_j, status_j);
+
+      const double* normal_i =
+          container_i->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_i);
+      const double* normal_j =
+          container_j->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_j);
+      if (ParticleUtils::vec_norm_two(normal_i) < 0.5 or
+          ParticleUtils::vec_norm_two(normal_j) < 0.5 or
+          ParticleUtils::vec_dot(normal_i, normal_j) <= cos_similar)
+        continue;
+
+      double r_ji[3];
+      particleengineinterface_->distance_between_particles(
+          container_i->get_ptr_to_state(Particle::State::Position, particle_i),
+          container_j->get_ptr_to_state(Particle::State::Position, particle_j), r_ji);
+      if (ParticleUtils::vec_norm_two(r_ji) >= fitradius) continue;
+
+      if (status_i == Particle::Status::Owned) add_point(particle_i, r_ji);
+      if (status_j == Particle::Status::Owned)
+      {
+        double r_ij[3];
+        ParticleUtils::vec_set_scale(r_ij, -1.0, r_ji);
+        add_point(particle_j, r_ij);
+      }
+    }
+
+    std::vector<double> refined(3 * particlestored, 0.0);
+    for (int i = 0; i < particlestored; ++i)
+    {
+      const double* normal = container->get_ptr_to_state(Particle::State::BoundaryContactNormal, i);
+      ParticleUtils::vec_set(&refined[3 * i], normal);
+      if (ParticleUtils::vec_norm_two(normal) < 0.5 or npoints[i] < 3) continue;
+
+      // covariance of the points
+      const std::array<double, 9>& m = moments[i];
+      const double n = static_cast<double>(npoints[i]);
+      const double mean[3] = {m[0] / n, m[1] / n, m[2] / n};
+      const std::array<double, 6> cov = {m[3] / n - mean[0] * mean[0], m[4] / n - mean[1] * mean[1],
+          m[5] / n - mean[2] * mean[2], m[6] / n - mean[0] * mean[1], m[7] / n - mean[0] * mean[2],
+          m[8] / n - mean[1] * mean[2]};
+      double axis[3];
+      if (not smallest_principal_axis(cov, axis)) continue;
+      double offset[3];
+      ParticleUtils::vec_set(offset, mean);
+      ParticleUtils::vec_add_scale(offset, -ParticleUtils::vec_dot(mean, axis), axis);
+      if (std::abs(ParticleUtils::vec_dot(axis, normal)) < cos_similar and
+          ParticleUtils::vec_norm_two(offset) > 0.3 * dx_pd_)
+        continue;
+      const double sign = ParticleUtils::vec_dot(axis, normal) < 0.0 ? -1.0 : 1.0;
+      ParticleUtils::vec_set_scale(&refined[3 * i], sign, axis);
+      ++numrefined;
+    }
+    for (int i = 0; i < particlestored; ++i)
+      ParticleUtils::vec_set(
+          container->get_ptr_to_state_writable(Particle::State::BoundaryContactNormal, i),
+          &refined[3 * i]);
+  }
+
   // number of boundary particles with a surface normal (once, for checking the structure surfaces)
   const int globalwithnormal = Core::Communication::sum_all(numwithnormal, comm_);
   const int globalstored = Core::Communication::sum_all(particlestored, comm_);
+  const int globalrefined = Core::Communication::sum_all(numrefined, comm_);
   if (Core::Communication::my_mpi_rank(comm_) == 0)
+  {
     std::cout << "PD contact: " << globalwithnormal << " of " << globalstored
-              << " boundary particles have a surface normal" << std::endl;
+              << " boundary particles have a surface normal";
+    if (boundary_contact_smooth_)
+      std::cout << " (outermost layer; smooth boundary surface, radius " << smooth_surface_radius_
+                << "; " << globalrefined << " normals from a plane fit)";
+    std::cout << std::endl;
+  }
 
   // ghosted boundary particles (contact pairs with ghosted boundary particles)
   particleengineinterface_->refresh_particles_of_specific_states_and_types(
       {{Particle::Type::BoundaryPhase, {Particle::State::BoundaryContactNormal}}});
+}
+
+void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
+    const bool substep, const double weight)
+{
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces");
+
+  if (not substep)
+  {
+    smoothcontactforce_dbc_funct_.assign(3, 0.0);
+    smoothcontactforce_other_.assign(3, 0.0);
+  }
+
+  Particle::ParticleContainer* container_i = particlecontainerbundle_->get_specific_container(
+      Particle::Type::PDPhase, Particle::Status::Owned);
+  const int particlestored = container_i->particles_stored();
+  if (particlestored <= 0) return;
+
+  const bool needvelocity = (damp_ != 0.0 or friction_boundary_ > 0.0);
+  const double radius2 = smooth_surface_radius_ * smooth_surface_radius_;
+  const double visibility_depth = 0.5 * dx_pd_;
+
+  // smooth onset of the contact with the weight sum S: the weighted mean f does not decay with the
+  // weights, so near convex edges and at the border of the support it would give a gap of a PD
+  // particle far from the boundary; potential phi(S) k g^2 / 2 with phi = 0 for S <= S_0, 1 for
+  // S >= S_1 (smoothstep); a PD particle at the distance dx from an outermost boundary particle has
+  // S >= W(dx) = 27/64 > S_1, so contacts at the surface are not affected
+  constexpr double gate_lower = 0.05;
+  constexpr double gate_upper = 0.30;
+
+  // implicit moving least squares surface of the outermost boundary particles (positions x_j,
+  // outward normals n_j) at an owned PD particle x (Kolluri 2008): f(x) = A / S with
+  // S = sum_j W_j, A = sum_j W_j (x - x_j).n_j, W_j = (1 - |x - x_j|^2 / R^2)^3 h_j (h_j:
+  // visibility, below), and
+  // grad f = (sum_j W_j n_j + sum_j ((x - x_j).n_j - f) grad W_j) / S; sums of each PD particle:
+  // [0] S, [1] A, [2-4] sum W_j n_j, [5-7] sum (x - x_j).n_j grad W_j, [8-10] sum grad W_j,
+  // [11-13] sum W_j v_j, [14] sum W_j of boundary particles with a per-particle Dirichlet function
+  smoothslot_.assign(particlestored, -1);
+  smoothsums_.clear();
+
+  for (const auto& pair : neighborpairs_pd_->get_ref_to_boundary_contact_pairs())
+  {
+    const int particle_i = std::get<2>(pair.tuple_i_);
+    Particle::Type type_j;
+    Particle::Status status_j;
+    int particle_j;
+    std::tie(type_j, status_j, particle_j) = pair.tuple_j_;
+    Particle::ParticleContainer* container_j =
+        particlecontainerbundle_->get_specific_container(type_j, status_j);
+
+    // local indices are valid within a time step (no transfer of particles during the substeps)
+    FOUR_C_ASSERT_ALWAYS(
+        particle_i < particlestored and particle_j < container_j->particles_stored() and
+            container_i->get_ptr_to_global_id(particle_i)[0] == pair.globalid_i_ and
+            container_j->get_ptr_to_global_id(particle_j)[0] == pair.globalid_j_,
+        "smooth boundary surface: invalid pair (global ids {} and {})!", pair.globalid_i_,
+        pair.globalid_j_);
+
+    // inner boundary particles do not form the surface
+    const double* normal =
+        container_j->get_ptr_to_state(Particle::State::BoundaryContactNormal, particle_j);
+    if (ParticleUtils::vec_norm_two(normal) < 0.5) continue;
+
+    // vector from the boundary particle to the PD particle
+    double r[3];
+    particleengineinterface_->distance_between_particles(
+        container_j->get_ptr_to_state(Particle::State::Position, particle_j),
+        container_i->get_ptr_to_state(Particle::State::Position, particle_i), r);
+    const double dist2 = ParticleUtils::vec_dot(r, r);
+    if (dist2 >= radius2) continue;
+
+    // weight W_r(|x - x_j|) h((x - x_j).n_j): visibility h fades the contribution of a boundary
+    // particle from its tangent plane to the depth c dx behind it (smoothstep), so that tangent
+    // planes behind the PD particle (around convex edges) do not count; contacts with a penetration
+    // below dx are not affected (on a flat wall the contact holds up to a penetration of ~1.35 dx,
+    // ~0.85 k dx^2 of energy; beyond, the weight sum falls below the onset gate)
+    const double rn = ParticleUtils::vec_dot(r, normal);
+    const double u = std::clamp((rn + visibility_depth) / visibility_depth, 0.0, 1.0);
+    if (u <= 0.0) continue;
+    const double h = u * u * (3.0 - 2.0 * u);
+    const double dh = 6.0 * u * (1.0 - u) / visibility_depth;
+    const double q = 1.0 - dist2 / radius2;
+    const double wr = q * q * q;
+    const double dwrfac = -6.0 * q * q / radius2;
+    const double w = wr * h;
+    double gradw[3];
+    for (int dim = 0; dim < 3; ++dim) gradw[dim] = h * dwrfac * r[dim] + wr * dh * normal[dim];
+
+    int& slot = smoothslot_[particle_i];
+    if (slot < 0)
+    {
+      slot = static_cast<int>(smoothsums_.size());
+      smoothsums_.emplace_back();
+      smoothsums_.back().fill(0.0);
+    }
+    std::array<double, 15>& sums = smoothsums_[slot];
+    sums[0] += w;
+    sums[1] += w * rn;
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      sums[2 + dim] += w * normal[dim];
+      sums[5 + dim] += rn * gradw[dim];
+      sums[8 + dim] += gradw[dim];
+    }
+    if (needvelocity)
+    {
+      const double* vel_j = container_j->get_ptr_to_state(Particle::State::Velocity, particle_j);
+      for (int dim = 0; dim < 3; ++dim) sums[11 + dim] += w * vel_j[dim];
+    }
+    if (container_j->have_stored_state(Particle::State::DirichletFunctionId) and
+        static_cast<int>(
+            container_j->get_ptr_to_state(Particle::State::DirichletFunctionId, particle_j)[0]) > 0)
+      sums[14] += w;
+  }
+
+  for (int i = 0; i < particlestored; ++i)
+  {
+    const int slot = smoothslot_[i];
+    if (slot < 0) continue;
+    const std::array<double, 15>& sums = smoothsums_[slot];
+
+    // gap to the surface (contact at the distance dx of the particle centres, as for a lattice)
+    const double f = sums[1] / sums[0];
+    const double gap = f - dx_pd_;
+    if (gap >= 0.0) continue;
+
+    const double t = std::clamp((sums[0] - gate_lower) / (gate_upper - gate_lower), 0.0, 1.0);
+    if (t <= 0.0) continue;
+    const double phi = t * t * (3.0 - 2.0 * t);
+    const double dphi = 6.0 * t * (1.0 - t) / (gate_upper - gate_lower);
+
+    // spring force -grad(phi k g^2 / 2) = -k g (phi grad f + g phi' grad S / 2)
+    double grad[3];
+    double fspring[3];
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      grad[dim] = (sums[2 + dim] + sums[5 + dim] - f * sums[8 + dim]) / sums[0];
+      fspring[dim] = -stiff_ * gap * (phi * grad[dim] + 0.5 * gap * dphi * sums[8 + dim]);
+    }
+
+    // outward unit normal of the surface (where |grad f| is small: the mean normal)
+    double normal[3];
+    const double gradnorm = ParticleUtils::vec_norm_two(grad);
+    if (gradnorm > 0.1)
+      ParticleUtils::vec_set_scale(normal, 1.0 / gradnorm, grad);
+    else
+    {
+      const double meannorm = ParticleUtils::vec_norm_two(&sums[2]);
+      if (meannorm <= 0.0) continue;
+      ParticleUtils::vec_set_scale(normal, 1.0 / meannorm, &sums[2]);
+    }
+
+    // direction from the PD particle into the surface (as e from particle i to j of a pair)
+    double e[3];
+    ParticleUtils::vec_set_scale(e, -1.0, normal);
+
+    // velocity of the surface (weighted mean of the boundary particles) and rate of the gap
+    double vel_b[3] = {0.0, 0.0, 0.0};
+    const double* vel_i =
+        needvelocity ? container_i->get_ptr_to_state(Particle::State::Velocity, i) : nullptr;
+    if (needvelocity)
+      for (int dim = 0; dim < 3; ++dim) vel_b[dim] = sums[11 + dim] / sums[0];
+    double gapdot = 0.0;
+    if (damp_ != 0.0)
+      gapdot = -1.0 * (ParticleUtils::vec_dot(vel_i, e) - ParticleUtils::vec_dot(vel_b, e));
+
+    // normal force (spring and damping, compressive only) along e, tangential part of the spring
+    const double fspring_n = ParticleUtils::vec_dot(fspring, normal);
+    const double fac = std::min(0.0, -fspring_n + phi * damp_ * gapdot);
+    if (fac == 0.0) continue;
+
+    double force[3];
+    ParticleUtils::vec_set(force, fspring);
+    ParticleUtils::vec_add_scale(force, -fspring_n, normal);
+    ParticleUtils::vec_add_scale(force, fac, e);
+    double f_t[3];
+    if (needvelocity and friction_force(Particle::Type::PDPhase, Particle::Type::BoundaryPhase,
+                             vel_i, vel_b, e, fac, f_t))
+      ParticleUtils::vec_add(force, f_t);
+
+    ParticleUtils::vec_add(
+        container_i->get_ptr_to_state_writable(Particle::State::Force, i), force);
+
+    // reaction on the boundary, split by the weights of the boundary particles with a Dirichlet
+    // function (moving structure) and without
+    const double share = sums[14] / sums[0];
+    for (int dim = 0; dim < 3; ++dim)
+    {
+      const double reaction_dbc_funct = -share * force[dim];
+      const double reaction_other = -(1.0 - share) * force[dim];
+      if (substep)
+      {
+        substepcontactimpulse_dbc_funct_[dim] += weight * reaction_dbc_funct;
+        substepcontactimpulse_other_[dim] += weight * reaction_other;
+      }
+      else
+      {
+        smoothcontactforce_dbc_funct_[dim] += reaction_dbc_funct;
+        smoothcontactforce_other_[dim] += reaction_other;
+        if (pd_substeps_ > 1)
+        {
+          contactforce_dbc_funct_[dim] += reaction_dbc_funct;
+          contactforce_other_[dim] += reaction_other;
+        }
+      }
+    }
+  }
 }
 
 void Particle::SPHPeridynamic::contact_direction(const Particle::Type type_i,

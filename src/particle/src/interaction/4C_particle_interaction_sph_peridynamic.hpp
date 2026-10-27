@@ -113,6 +113,12 @@ namespace Particle
     //! outward surface normals of the boundary particles for the contact with PD particles (once)
     void compute_boundary_contact_normals();
 
+    //! contact of the owned PD particles with the smooth surface of the boundary particles: forces
+    //! on the PD particles, reactions to the boundary force sums of the evaluation of all
+    //! interactions (substep false) or to the contact impulse of the substeps (substep true, weight
+    //! h)
+    void compute_smooth_boundary_contact_forces(bool substep, double weight);
+
     //! regularized Coulomb friction force on particle i of a contact pair (direction e from i to j,
     //! normal force factor fac <= 0); returns false (and a zero force) without friction
     bool friction_force(const Particle::Type type_i, const Particle::Type type_j,
@@ -209,6 +215,19 @@ namespace Particle
     const double friction_pd_;
     const double friction_boundary_;
     const double friction_damp_;
+
+    //! contact between PD particles and the smooth boundary surface, radius of its weight function
+    const bool boundary_contact_smooth_;
+    const double smooth_surface_radius_;
+
+    //! reaction of the contact with the smooth boundary surface in the last evaluation of all
+    //! interactions (owned PD particles of this processor), part of the boundary force sums
+    std::vector<double> smoothcontactforce_dbc_funct_ = std::vector<double>(3, 0.0);
+    std::vector<double> smoothcontactforce_other_ = std::vector<double>(3, 0.0);
+
+    //! sums of the smooth boundary surface of the owned PD particles near the boundary (reused)
+    std::vector<int> smoothslot_;
+    std::vector<std::array<double, 15>> smoothsums_;
 
     //! flag indicating the computation of the boundary surface normals
     bool computedboundarynormals_ = false;

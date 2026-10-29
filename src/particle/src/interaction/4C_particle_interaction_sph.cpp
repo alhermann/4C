@@ -706,6 +706,9 @@ void Particle::ParticleInteractionSPH::set_current_step_size(const double curren
 
   // set current step size
   if (temperature_) temperature_->set_current_step_size(currentstepsize);
+
+  // set current step size
+  if (peridynamics_) peridynamics_->set_current_step_size(currentstepsize);
 }
 
 void Particle::ParticleInteractionSPH::init_kernel_handler()

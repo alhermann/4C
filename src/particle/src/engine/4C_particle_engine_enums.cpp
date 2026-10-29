@@ -75,7 +75,11 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::CouplingForce:
     case ParticleState::SubstepVelocity:
     case ParticleState::BoundaryContactNormal:
+    case ParticleState::PDBoundaryContactSpring:
       dim = 3;
+      break;
+    case ParticleState::PDContactHistory:
+      dim = 48;  // 12 slots of (partner global id + 1, tangential displacement)
       break;
 
     default:
@@ -243,6 +247,12 @@ std::string Particle::enum_to_state_name(const ParticleState& state)
       break;
     case ParticleState::BoundaryContactNormal:
       name = "boundary_contact_normal";
+      break;
+    case ParticleState::PDContactHistory:
+      name = "pd_contact_history";
+      break;
+    case ParticleState::PDBoundaryContactSpring:
+      name = "pd_boundary_contact_spring";
       break;
     case ParticleState::OpenBoundaryId:
       name = "open_boundary_id";

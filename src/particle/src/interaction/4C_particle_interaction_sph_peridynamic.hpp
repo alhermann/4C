@@ -19,6 +19,8 @@
 #include "4C_particle_interaction_sph.hpp"
 
 #include <array>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 FOUR_C_NAMESPACE_OPEN
@@ -63,6 +65,9 @@ namespace Particle
 
     //! number of velocity Verlet substeps of the peridynamic phase per time step
     int pd_substeps() const { return pd_substeps_; }
+
+    //! current time step size (zero in the evaluation of the initial states)
+    void set_current_step_size(const double dt) { dt_ = dt; }
 
     /*!
      * \brief multi-rate integration of the peridynamic phase from t_n to t_n+1
@@ -118,6 +123,40 @@ namespace Particle
     //! interactions (substep false) or to the contact impulse of the substeps (substep true, weight
     //! h)
     void compute_smooth_boundary_contact_forces(bool substep, double weight);
+
+    //! Coulomb friction with an elastic tangential spring (Cundall-Strack) on particle i of a
+    //! contact (direction e from i to j, normal force factor fac <= 0, stored tangential
+    //! displacement xi of i relative to j, incremented with the relative drift velocity over the
+    //! contact interval; nullptr: viscous regularization); returns false without friction
+    bool spring_friction_force(double mu, const double* vel_i, const double* vel_j,
+        const double* drift_i, const double* drift_j, const double* e, double fac, double* xi,
+        double* f_t) const;
+
+    //! friction of a contact pair (spring friction with history for PD-PD pairs if enabled)
+    bool pair_friction(Particle::Type type_i, Particle::Status status_i,
+        ParticleContainer* container_i, int particle_i, int globalid_i, Particle::Type type_j,
+        Particle::Status status_j, ParticleContainer* container_j, int particle_j, int globalid_j,
+        const double* vel_i, const double* vel_j, const double* e, double fac, double* f_t);
+
+    //! history slot (tangential displacement) of the contact of an owned PD particle with a partner
+    //! (global id); a free slot is taken if create; nullptr if not found or all slots are taken
+    double* contact_history_slot(
+        ParticleContainer* container, int particle, int globalid_partner, bool create);
+
+    //! release the history slot of a contact (if any)
+    void release_contact_history_slot(
+        ParticleContainer* container, int particle, int globalid_partner);
+
+    //! start / finish a contact evaluation: time since the previous contact evaluation, flag for
+    //! the drift velocity of the PD particles in the state SubstepVelocity (evaluation at t_n+1 of
+    //! the multi-rate integration, where Velocity is the mean velocity of the step); history slots
+    //! of contacts not evaluated are released at the end
+    void begin_contact_history(double interval, bool driftsubstepvelocity);
+    void end_contact_history();
+
+    //! velocity of a PD particle over the interval since the previous contact evaluation
+    const double* drift_velocity(
+        const ParticleContainer* container, int particle, const double* velocity) const;
 
     //! regularized Coulomb friction force on particle i of a contact pair (direction e from i to j,
     //! normal force factor fac <= 0); returns false (and a zero force) without friction
@@ -219,6 +258,20 @@ namespace Particle
     //! contact between PD particles and the smooth boundary surface, radius of its weight function
     const bool boundary_contact_smooth_;
     const double smooth_surface_radius_;
+
+    //! Coulomb friction with an elastic tangential spring: flag, tangential stiffness
+    const bool friction_spring_;
+    const double friction_kt_;
+
+    //! current time step size, time since the previous contact evaluation and drift velocity flag
+    //! of the current contact evaluation (begin_contact_history)
+    double dt_ = 0.0;
+    double contact_interval_ = 0.0;
+    bool contact_drift_substep_ = false;
+
+    //! history slots of the owned PD particles evaluated in the current contact evaluation (bit
+    //! mask)
+    std::vector<std::uint16_t> historytouched_;
 
     //! reaction of the contact with the smooth boundary surface in the last evaluation of all
     //! interactions (owned PD particles of this processor), part of the boundary force sums

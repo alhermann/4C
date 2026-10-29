@@ -113,7 +113,11 @@ namespace Particle
     SubstepVelocity,  //!< velocity of a pd particle after the substeps (until the closing kick)
     /*---------------------------------------------------------------------------*/
     // particle states for the contact of peridynamic particles with boundary particles
-    BoundaryContactNormal  //!< outward surface normal of a boundary particle (pd contact)
+    BoundaryContactNormal,  //!< outward surface normal of a boundary particle (pd contact)
+    /*---------------------------------------------------------------------------*/
+    // particle states for the friction of peridynamic particles with a tangential spring
+    PDContactHistory,        //!< tangential displacement of pd-pd contacts (partner id + 1, xi)
+    PDBoundaryContactSpring  //!< tangential displacement of the contact with the smooth boundary
     /*---------------------------------------------------------------------------*/
   };
 

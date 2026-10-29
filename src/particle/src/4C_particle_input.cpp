@@ -695,9 +695,24 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                   .default_value = 0.0}),
           parameter<double>("FRICTION_TANGENTIAL_DAMP",
               {.description = "regularization coefficient c_t of the Coulomb friction (tangential "
-                              "force c_t |v_t| below the Coulomb limit); required if a friction "
-                              "coefficient is positive",
+                              "force c_t |v_t| below the Coulomb limit; with "
+                              "FRICTION_TANGENTIAL_SPRING the tangential damping); required if a "
+                              "friction coefficient is positive",
                   .default_value = 0.0}),
+          parameter<bool>("FRICTION_TANGENTIAL_SPRING",
+              {.description =
+                      "Coulomb friction with an elastic tangential spring (Cundall-Strack): the "
+                      "tangential displacement xi of each contact is stored (PD-PD contacts: 12 "
+                      "slots per particle; contact with the smooth boundary surface: one per "
+                      "particle), f_t = -k_t xi - c_t v_t capped at mu |f_n| (slip sets xi to the "
+                      "Coulomb force), so that loaded contacts stick instead of creeping (viscous "
+                      "regularization, also used for a PD-PD contact if all slots of the particle "
+                      "are taken); boundary friction requires BOUNDARY_CONTACT_SMOOTH_SURFACE",
+                  .default_value = false}),
+          parameter<double>("FRICTION_TANGENTIAL_STIFF_RATIO",
+              {.description = "k_t / NORMAL_STIFF of the tangential spring (0.5 as in DEM ice "
+                              "models, e.g. Ji, Di & Liu 2015)",
+                  .default_value = 0.5}),
 
           // direction of the contact force between PD and boundary particles
           parameter<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL",

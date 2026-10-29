@@ -41,6 +41,7 @@ void Particle::ParticleRuntimeVtpWriter::init(
       {State::LastIterPosition, State::LastIterVelocity, State::LastIterAcceleration,
           State::LastIterAngularVelocity, State::LastIterAngularAcceleration,
           State::LastIterModifiedAcceleration, State::LastIterDensity, State::LastIterTemperature});
+  blackliststates_.insert(State::PDContactHistory);  // internal pd contact history (48 values)
 }
 
 void Particle::ParticleRuntimeVtpWriter::setup(bool write_ghosted_particles)

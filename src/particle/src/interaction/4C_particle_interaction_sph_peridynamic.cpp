@@ -1061,6 +1061,7 @@ void Particle::SPHPeridynamic::integrate_substeps(
     std::copy(pos, pos + statedim * particlestored, pos_n.begin());
   }
   double maxdisplacement = 0.0;
+  int maxdisplacementparticle = -1;
 
   for (int k = 0; k < n; ++k)
   {
@@ -1080,7 +1081,12 @@ void Particle::SPHPeridynamic::integrate_substeps(
         double disp[3];
         ParticleUtils::vec_set(disp, &pos[statedim * i]);
         ParticleUtils::vec_sub(disp, &pos_n[statedim * i]);
-        maxdisplacement = std::max(maxdisplacement, ParticleUtils::vec_norm_two(disp));
+        const double displacement = ParticleUtils::vec_norm_two(disp);
+        if (displacement > maxdisplacement)
+        {
+          maxdisplacement = displacement;
+          maxdisplacementparticle = i;
+        }
       }
     }
 
@@ -1161,10 +1167,34 @@ void Particle::SPHPeridynamic::integrate_substeps(
   const std::array<double, 2> maxdisp = Core::Communication::max_all(
       std::array<double, 2>{maxdisplacement, maxboundarydisplacement}, comm_);
   if (2.0 * maxdisp[0] + maxdisp[1] >= contact_candidate_skin_)
+  {
+    // the process owning the fastest PD particle reports it (diagnosis of runaway particles)
+    std::string fastest;
+    if (maxdisplacementparticle >= 0 and maxdisplacement == maxdisp[0])
+    {
+      const int i = maxdisplacementparticle;
+      const double* pos = container->get_ptr_to_state(Particle::State::Position, i);
+      const double* vel = container->get_ptr_to_state(Particle::State::Velocity, i);
+      const double* substepvel = container->get_ptr_to_state(Particle::State::SubstepVelocity, i);
+      const double* bonds = container->get_ptr_to_state(Particle::State::CurrentConnectedBonds, i);
+      const double* initialbonds =
+          container->get_ptr_to_state(Particle::State::InitialConnectedBonds, i);
+      const auto vec = [](const double* v)
+      {
+        return "(" + std::to_string(v[0]) + ", " + std::to_string(v[1]) + ", " +
+               std::to_string(v[2]) + ")";
+      };
+      fastest = "; fastest PD particle: global id " +
+                std::to_string(container->get_ptr_to_global_id(i)[0]) + ", position " + vec(pos) +
+                ", at t_n " + vec(&pos_n[statedim * i]) + ", mean velocity " + vec(vel) +
+                ", velocity of the last substep " + vec(substepvel) + ", bonds " +
+                std::to_string(bonds[0]) + " of " + std::to_string(initialbonds[0]);
+    }
     FOUR_C_THROW(
         "PD substeps: particles moved by up to {} (PD) and {} (boundary) within one time step; the "
-        "contact candidates (skin {}) may be incomplete, reduce TIMESTEP!",
-        maxdisp[0], maxdisp[1], contact_candidate_skin_);
+        "contact candidates (skin {}) may be incomplete, reduce TIMESTEP!{}",
+        maxdisp[0], maxdisp[1], contact_candidate_skin_, fastest);
+  }
 }
 
 void Particle::SPHPeridynamic::complete_substeps(const double dt) const

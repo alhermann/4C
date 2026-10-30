@@ -30,6 +30,7 @@
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <set>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -116,8 +117,23 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
       smooth_surface_radius_(2.0 * dx_pd_),
       friction_spring_(particle_params.sublist("PD").get<bool>("FRICTION_TANGENTIAL_SPRING")),
       friction_kt_(
-          particle_params.sublist("PD").get<double>("FRICTION_TANGENTIAL_STIFF_RATIO") * stiff_)
+          particle_params.sublist("PD").get<double>("FRICTION_TANGENTIAL_STIFF_RATIO") * stiff_),
+      crushing_pressure_(
+          particle_params.sublist("PD").get<double>("BOUNDARY_CONTACT_CRUSHING_PRESSURE")),
+      crushing_force_(
+          crushing_pressure_ * dx_pd_ *
+          (peridynamic_dimension_ == PeridynamicDimension::Peridynamic_3D ? dx_pd_ : 1.0))
 {
+  FOUR_C_ASSERT_ALWAYS(
+      crushing_pressure_ >= 0.0 and (crushing_pressure_ == 0.0 or boundary_contact_smooth_),
+      "PD contact: BOUNDARY_CONTACT_CRUSHING_PRESSURE must not be negative and requires "
+      "BOUNDARY_CONTACT_SMOOTH_SURFACE!");
+  // the force limit must be reached at an elastic overlap well below dx (else particles would be
+  // removed before the limit acts)
+  FOUR_C_ASSERT_ALWAYS(crushing_pressure_ == 0.0 or crushing_force_ < 0.1 * stiff_ * dx_pd_,
+      "PD contact: the crushing force limit sigma_p dx^(d-1) = {} reaches the elastic overlap "
+      "{} dx (NORMAL_STIFF {}); it must stay below 0.1 dx!",
+      crushing_force_, crushing_force_ / (stiff_ * dx_pd_), stiff_);
   FOUR_C_ASSERT_ALWAYS(not friction_spring_ or friction_kt_ > 0.0,
       "PD contact: FRICTION_TANGENTIAL_SPRING requires FRICTION_TANGENTIAL_STIFF_RATIO > 0!");
   FOUR_C_ASSERT_ALWAYS(
@@ -253,6 +269,14 @@ void Particle::SPHPeridynamic::setup(
 
   // set particle material handler
   particlematerial_ = particlematerial;
+
+  if (crushing_pressure_ > 0.0 and Core::Communication::my_mpi_rank(comm_) == 0)
+    Core::IO::cout << "PD contact crushing at the smooth boundary surface: sigma_p "
+                   << crushing_pressure_
+                   << ", normal force limit sigma_p dx^(d-1) = " << crushing_force_
+                   << " per PD particle (elastic overlap at the limit "
+                   << crushing_force_ / (stiff_ * dx_pd_)
+                   << " dx); particles with an overlap of dx are removed" << Core::IO::endl;
 }
 
 void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
@@ -283,6 +307,9 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
       if (friction_spring_)
         particlestates.insert(
             {Particle::State::PDContactHistory, Particle::State::PDBoundaryContactSpring});
+
+      // plastic overlap of the contact with the smooth boundary surface (crushing)
+      if (crushing_pressure_ > 0.0) particlestates.insert(Particle::State::PDBoundaryCrushing);
     }
     else if (typeIt.first == Particle::Type::BoundaryPhase)
     {
@@ -1682,6 +1709,8 @@ void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
   smoothslot_.assign(particlestored, -1);
   smoothsums_.clear();
   std::vector<char> incontact(friction_spring_ ? particlestored : 0, 0);
+  const bool crushing = crushing_pressure_ > 0.0;
+  std::vector<char> crushcontact(crushing ? particlestored : 0, 0);
 
   for (const auto& pair : neighborpairs_pd_->get_ref_to_boundary_contact_pairs())
   {
@@ -1774,13 +1803,40 @@ void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
     const double phi = t * t * (3.0 - 2.0 * t);
     const double dphi = 6.0 * t * (1.0 - t) / (gate_upper - gate_lower);
 
-    // spring force -grad(phi k g^2 / 2) = -k g (phi grad f + g phi' grad S / 2)
+    // crushing: the spring acts on the elastic part g_e = g - g_p of the overlap (g_p <= 0: plastic
+    // overlap, the crushed depth); a particle whose overlap reached dx is crushed (its volume has
+    // been swept by the boundary) and removed before the next update of the connectivity
+    double* plastic = nullptr;
+    double gap_e = gap;
+    if (crushing)
+    {
+      plastic = container_i->get_ptr_to_state_writable(Particle::State::PDBoundaryCrushing, i);
+      gap_e = gap - plastic[0];
+      crushcontact[i] = 1;
+      if (not substep and gap <= -dx_pd_)
+      {
+        const int globalid = container_i->get_ptr_to_global_id(i)[0];
+        if (std::find(crushedglobalids_.begin(), crushedglobalids_.end(), globalid) ==
+            crushedglobalids_.end())
+          crushedglobalids_.push_back(globalid);
+      }
+      if (gap_e >= 0.0)
+      {
+        // crushed volume only (no elastic overlap): no force, the tangential spring is released
+        if (friction_spring_)
+          ParticleUtils::vec_clear(
+              container_i->get_ptr_to_state_writable(Particle::State::PDBoundaryContactSpring, i));
+        continue;
+      }
+    }
+
+    // spring force -grad(phi k g_e^2 / 2) = -k g_e (phi grad f + g_e phi' grad S / 2)
     double grad[3];
     double fspring[3];
     for (int dim = 0; dim < 3; ++dim)
     {
       grad[dim] = (sums[2 + dim] + sums[5 + dim] - f * sums[8 + dim]) / sums[0];
-      fspring[dim] = -stiff_ * gap * (phi * grad[dim] + 0.5 * gap * dphi * sums[8 + dim]);
+      fspring[dim] = -stiff_ * gap_e * (phi * grad[dim] + 0.5 * gap_e * dphi * sums[8 + dim]);
     }
 
     // outward unit normal of the surface (where |grad f| is small: the mean normal)
@@ -1811,12 +1867,31 @@ void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
 
     // normal force (spring and damping, compressive only) along e, tangential part of the spring
     const double fspring_n = ParticleUtils::vec_dot(fspring, normal);
-    const double fac = std::min(0.0, -fspring_n + phi * damp_ * gapdot);
+    double fac = std::min(0.0, -fspring_n + phi * damp_ * gapdot);
     if (fac == 0.0) continue;
 
+    // crushing: the normal force (spring and damping) is limited to sigma_p dx^2; if the spring
+    // alone exceeds the limit, the overlap beyond the elastic overlap at the limit becomes plastic
+    // (elastic-viscous-plastic contact of Hopkins 1992 and Polojarvi 2022, eqs. 6-8)
+    double springscale = 1.0;
+    if (plastic and -fac > crushing_force_)
+    {
+      if (fspring_n > crushing_force_)
+      {
+        springscale = crushing_force_ / fspring_n;
+        const double plastic_new = gap - springscale * gap_e;
+        if (plastic_new < plastic[0])
+        {
+          plasticwork_ += crushing_force_ * (plastic[0] - plastic_new);
+          plastic[0] = plastic_new;
+        }
+      }
+      fac = -crushing_force_;
+    }
+
     double force[3];
-    ParticleUtils::vec_set(force, fspring);
-    ParticleUtils::vec_add_scale(force, -fspring_n, normal);
+    ParticleUtils::vec_set_scale(force, springscale, fspring);
+    ParticleUtils::vec_add_scale(force, -springscale * fspring_n, normal);
     ParticleUtils::vec_add_scale(force, fac, e);
     double f_t[3];
     bool friction = false;
@@ -1860,6 +1935,15 @@ void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
     }
   }
 
+  // crushing: the plastic overlap of particles without contact with the boundary surface is reset
+  if (crushing)
+  {
+    double* plastic =
+        container_i->get_ptr_to_state_writable(Particle::State::PDBoundaryCrushing, 0);
+    for (int i = 0; i < particlestored; ++i)
+      if (not crushcontact[i]) plastic[i] = 0.0;
+  }
+
   // tangential springs of the particles without contact with the boundary surface are released
   if (friction_spring_)
   {
@@ -1868,6 +1952,60 @@ void Particle::SPHPeridynamic::compute_smooth_boundary_contact_forces(
     for (int i = 0; i < particlestored; ++i)
       if (not incontact[i]) ParticleUtils::vec_clear(&spring[3 * i]);
   }
+}
+
+void Particle::SPHPeridynamic::remove_crushed_particles()
+{
+  if (crushing_pressure_ <= 0.0) return;
+
+  TEUCHOS_FUNC_TIME_MONITOR("Particle::SPHPeridynamic::remove_crushed_particles");
+
+  // owned PD particles marked as crushed in the last evaluation of all interactions (the local
+  // indices are taken from the global ids: the containers may have changed since); notes: the
+  // bonds of their partners are dropped without decreasing CurrentConnectedBonds (the damage of
+  // the partners, output only, reads low); the marks and totals are not written to the restart
+  // (after a restart a marked particle is removed one step later)
+  const int typevectorsize =
+      static_cast<int>(*(--particlecontainerbundle_->get_particle_types().end())) + 1;
+  std::vector<std::set<int>> particlestoremove(typevectorsize);
+  std::vector<int> globalidstofree;
+  if (not crushedglobalids_.empty())
+  {
+    Particle::ParticleContainer* container = particlecontainerbundle_->get_specific_container(
+        Particle::Type::PDPhase, Particle::Status::Owned);
+    const std::set<int> crushed(crushedglobalids_.begin(), crushedglobalids_.end());
+    for (int i = 0; i < container->particles_stored(); ++i)
+    {
+      const int globalid = container->get_ptr_to_global_id(i)[0];
+      if (not crushed.contains(globalid)) continue;
+      particlestoremove[static_cast<int>(Particle::Type::PDPhase)].insert(i);
+      globalidstofree.push_back(globalid);
+      const double mass = container->get_ptr_to_state(Particle::State::Mass, i)[0];
+      const double* vel = container->get_ptr_to_state(
+          pd_substeps_ > 1 ? Particle::State::SubstepVelocity : Particle::State::Velocity, i);
+      crushedmass_ += mass;
+      crushedkinetic_ += 0.5 * mass * ParticleUtils::vec_dot(vel, vel);
+    }
+    crushedglobalids_.clear();
+  }
+  crushedcount_ += static_cast<int>(globalidstofree.size());
+
+  // same decision on all processors: report and remove if any particle was crushed
+  const int removed = Core::Communication::sum_all(static_cast<int>(globalidstofree.size()), comm_);
+  if (removed == 0) return;
+
+  const int total = Core::Communication::sum_all(crushedcount_, comm_);
+  const std::array<double, 3> totals = Core::Communication::sum_all(
+      std::array<double, 3>{crushedmass_, crushedkinetic_, plasticwork_}, comm_);
+  if (Core::Communication::my_mpi_rank(comm_) == 0)
+    Core::IO::cout << "PD crushing: " << removed << " particle(s) crushed and removed (total "
+                   << total << ", mass " << totals[0] << ", kinetic energy " << totals[1]
+                   << "), plastic work of the contact " << totals[2] << Core::IO::endl;
+
+  // free their global ids and remove them (invalidates the connectivity: the next update rebuilds
+  // ghosting and neighbor pairs, and bonds to removed particles are dropped from the bond list)
+  particleengineinterface_->free_unique_global_ids(globalidstofree);
+  particleengineinterface_->hand_over_particles_to_be_removed(particlestoremove);
 }
 
 void Particle::SPHPeridynamic::begin_contact_history(

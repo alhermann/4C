@@ -100,6 +100,12 @@ namespace Particle
     //! damage evaluation of peridynamic body
     void damage_evaluation();
 
+    //! remove the PD particles crushed at the smooth boundary surface; called before the next
+    //! update of the connectivity (end of the substeps, or after the step with a single rate),
+    //! which rebuilds ghosting, neighbor pairs and the bond list (bonds to removed particles are
+    //! dropped)
+    void remove_crushed_particles();
+
     //! clear force state of boundary particles (reaction of fluid and contact forces on walls)
     void clear_boundary_forces() const;
 
@@ -262,6 +268,20 @@ namespace Particle
     //! Coulomb friction with an elastic tangential spring: flag, tangential stiffness
     const bool friction_spring_;
     const double friction_kt_;
+
+    //! crushing at the smooth boundary surface: crushing pressure sigma_p (0: off) and the limit
+    //! sigma_p dx^(d-1) of the normal contact force on a PD particle (2D: per unit thickness)
+    const double crushing_pressure_;
+    const double crushing_force_;
+
+    //! crushing: global ids of the owned PD particles crushed in the last evaluation of all
+    //! interactions (removed before the next update of the connectivity), totals on this processor
+    //! of the removed particles, their mass and kinetic energy and the plastic work of the contact
+    std::vector<int> crushedglobalids_;
+    int crushedcount_ = 0;
+    double crushedmass_ = 0.0;
+    double crushedkinetic_ = 0.0;
+    double plasticwork_ = 0.0;
 
     //! current time step size, time since the previous contact evaluation and drift velocity flag
     //! of the current contact evaluation (begin_contact_history)

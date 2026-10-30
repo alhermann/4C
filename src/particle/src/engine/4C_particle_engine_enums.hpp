@@ -116,8 +116,11 @@ namespace Particle
     BoundaryContactNormal,  //!< outward surface normal of a boundary particle (pd contact)
     /*---------------------------------------------------------------------------*/
     // particle states for the friction of peridynamic particles with a tangential spring
-    PDContactHistory,        //!< tangential displacement of pd-pd contacts (partner id + 1, xi)
-    PDBoundaryContactSpring  //!< tangential displacement of the contact with the smooth boundary
+    PDContactHistory,         //!< tangential displacement of pd-pd contacts (partner id + 1, xi)
+    PDBoundaryContactSpring,  //!< tangential displacement of the contact with the smooth boundary
+    /*---------------------------------------------------------------------------*/
+    // particle state for the crushing of peridynamic particles at the smooth boundary surface
+    PDBoundaryCrushing  //!< plastic overlap (crushed depth, <= 0) at the smooth boundary
     /*---------------------------------------------------------------------------*/
   };
 

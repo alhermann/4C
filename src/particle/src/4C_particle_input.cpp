@@ -713,6 +713,18 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
               {.description = "k_t / NORMAL_STIFF of the tangential spring (0.5 as in DEM ice "
                               "models, e.g. Ji, Di & Liu 2015)",
                   .default_value = 0.5}),
+          parameter<double>("BOUNDARY_CONTACT_CRUSHING_PRESSURE",
+              {.description =
+                      "crushing pressure sigma_p of the contact between PD particles and the "
+                      "smooth boundary surface, local crushing as a contact property (Hopkins "
+                      "1992; Paavilainen et al. 2009; Polojarvi 2022): the normal contact force on "
+                      "a PD particle is limited to sigma_p dx^2 (2D: sigma_p dx per unit "
+                      "thickness), the overlap beyond the elastic "
+                      "part at the limit is plastic (unloading releases only the elastic part), "
+                      "and a particle whose overlap reaches dx is crushed and removed (the removed "
+                      "volume equals the volume swept by the boundary); sigma_p: measured "
+                      "compressive strength; 0 = off; requires BOUNDARY_CONTACT_SMOOTH_SURFACE",
+                  .default_value = 0.0}),
 
           // direction of the contact force between PD and boundary particles
           parameter<bool>("BOUNDARY_CONTACT_SURFACE_NORMAL",

@@ -535,7 +535,12 @@ void Particle::ParticleInteractionSPH::evaluate_interactions()
 void Particle::ParticleInteractionSPH::integrate_substeps(const std::vector<double>& gravity)
 {
   if (peridynamics_ and peridynamics_->pd_substeps() > 1)
+  {
     peridynamics_->integrate_substeps(dt_, gravity);
+
+    // crushed PD particles are removed before the update of the connectivity of this step
+    peridynamics_->remove_crushed_particles();
+  }
 }
 
 void Particle::ParticleInteractionSPH::complete_substeps()
@@ -648,6 +653,11 @@ void Particle::ParticleInteractionSPH::post_evaluate_time_step(
 
   // evaluate peridynamic damage
   if (peridynamics_) peridynamics_->damage_evaluation();
+
+  // single rate: crushed PD particles are removed before the update of the connectivity of the next
+  // step (with substeps: at the end of the substeps of the next step)
+  if (peridynamics_ and peridynamics_->pd_substeps() == 1)
+    peridynamics_->remove_crushed_particles();
 }
 
 double Particle::ParticleInteractionSPH::max_interaction_distance() const

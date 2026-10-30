@@ -81,6 +81,9 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::PDContactHistory:
       dim = 48;  // 12 slots of (partner global id + 1, tangential displacement)
       break;
+    case ParticleState::PDBoundaryCrushing:
+      dim = 1;
+      break;
 
     default:
       FOUR_C_THROW("particle state unknown!");
@@ -253,6 +256,9 @@ std::string Particle::enum_to_state_name(const ParticleState& state)
       break;
     case ParticleState::PDBoundaryContactSpring:
       name = "pd_boundary_contact_spring";
+      break;
+    case ParticleState::PDBoundaryCrushing:
+      name = "pd_boundary_crushing";
       break;
     case ParticleState::OpenBoundaryId:
       name = "open_boundary_id";

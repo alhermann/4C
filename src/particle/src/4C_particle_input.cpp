@@ -681,6 +681,16 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "volumes",
                   .default_value = false}),
 
+          // critical stretch per particle (e.g. varying through the thickness of a plate)
+          parameter<bool>("CRITICAL_STRETCH_PER_PARTICLE",
+              {.description =
+                      "critical stretch given for every PD particle in the particle input "
+                      "(CRITICAL_STRETCH s); a bond fails when its stretch reaches the mean "
+                      "critical stretch (s_i + s_j) / 2 of its two particles. The material "
+                      "CRITICAL_STRETCH is still required but not used. On restart the values "
+                      "come from the restart file",
+                  .default_value = false}),
+
           // Coulomb friction of the short-range contact (regularized by a tangential damping)
           parameter<double>("FRICTION_COEFF",
               {.description = "Coulomb friction coefficient of the contact between PD particles "

@@ -458,10 +458,35 @@ void Particle::ParticleInteractionSPH::set_initial_states()
       young[0] = material->young_;
       container->set_state(young, Particle::State::Young);
 
-      // set critical stretch for all peridynamic phase particles
-      std::vector<double> stretch(1);
-      stretch[0] = material->critical_stretch_;
-      container->set_state(stretch, Particle::State::CriticalStretch);
+      // set critical stretch for all peridynamic phase particles, or keep the values of the
+      // particle input (CRITICAL_STRETCH s) if they are given per particle
+      if (params_.sublist("PD").get<bool>("CRITICAL_STRETCH_PER_PARTICLE"))
+      {
+        for (int i = 0; i < particlestored; ++i)
+        {
+          const double s = container->get_ptr_to_state(Particle::State::CriticalStretch, i)[0];
+          if (not(s > 0.0 and s < 0.1))
+            FOUR_C_THROW(
+                "PD particle with global id {} has the critical stretch {}: "
+                "CRITICAL_STRETCH_PER_PARTICLE requires a value 0 < s < 0.1 for every PD particle "
+                "(particle input CRITICAL_STRETCH s)!",
+                container->get_ptr_to_global_id(i)[0], s);
+        }
+      }
+      else
+      {
+        // per-particle values (zero if not given) would be overwritten silently
+        for (int i = 0; i < particlestored; ++i)
+          if (container->get_ptr_to_state(Particle::State::CriticalStretch, i)[0] != 0.0)
+            FOUR_C_THROW(
+                "PD particle with global id {} has a critical stretch in the particle input: "
+                "set CRITICAL_STRETCH_PER_PARTICLE to use it!",
+                container->get_ptr_to_global_id(i)[0]);
+
+        std::vector<double> stretch(1);
+        stretch[0] = material->critical_stretch_;
+        container->set_state(stretch, Particle::State::CriticalStretch);
+      }
 
       // initialize peridynamic bond list once at the beginning of the simulation
       peridynamics_->init_peridynamic_bondlist();

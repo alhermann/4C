@@ -691,6 +691,38 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                       "come from the restart file",
                   .default_value = false}),
 
+          // elastic-plastic bonds (bond-based plasticity with linear hardening, failure at the
+          // total stretch)
+          parameter<bool>("BOND_PLASTICITY",
+              {.description =
+                      "elastic-plastic bonds: one plastic stretch s_p per bond, bond force "
+                      "c (s - s_p); tension yields at s - s_p = s_Y + h max(s_p, 0) with "
+                      "s_Y = BOND_YIELD_STRETCH, h = eta / (1 - eta), eta = "
+                      "BOND_HARDENING_RATIO (tangent eta c); compression yields perfectly "
+                      "plastically at s - s_p = -BOND_COMPRESSIVE_YIELD_STRETCH (0: elastic); "
+                      "unloading with c (a bond with a compressive set carries c s_Y in tension "
+                      "until s = s_Y); a bond fails at the total stretch (critical stretch) and, "
+                      "if given, at the compressive total stretch "
+                      "-BOND_COMPRESSIVE_FAILURE_STRETCH. Regular PD lattices, horizon of up to "
+                      "4 dx",
+                  .default_value = false}),
+          parameter<double>("BOND_YIELD_STRETCH",
+              {.description = "tensile yield stretch s_Y of the elastic-plastic bonds (> 0)",
+                  .default_value = 0.0}),
+          parameter<double>("BOND_HARDENING_RATIO",
+              {.description = "ratio eta of the bond tangent after tensile yield to the elastic "
+                              "micromodulus, 0 <= eta < 1 (continuum tangent eta E)",
+                  .default_value = 0.0}),
+          parameter<double>("BOND_COMPRESSIVE_YIELD_STRETCH",
+              {.description = "compressive yield stretch s_Yc of the elastic-plastic bonds "
+                              "(magnitude, perfectly plastic; 0: elastic in compression)",
+                  .default_value = 0.0}),
+          parameter<double>("BOND_COMPRESSIVE_FAILURE_STRETCH",
+              {.description = "elastic-plastic bonds: magnitude of the compressive total "
+                              "stretch at which a bond fails (crushed; the pair then interacts by "
+                              "contact); 0: no compressive failure",
+                  .default_value = 0.0}),
+
           // Coulomb friction of the short-range contact (regularized by a tangential damping)
           parameter<double>("FRICTION_COEFF",
               {.description = "Coulomb friction coefficient of the contact between PD particles "

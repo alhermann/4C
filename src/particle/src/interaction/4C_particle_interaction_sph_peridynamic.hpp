@@ -121,6 +121,15 @@ namespace Particle
     //! check that every owned PD particle has a positive surface correction factor
     void check_surface_correction_factors() const;
 
+    //! slot of the plastic stretch of the bond with reference vector xi (from the particle to its
+    //! partner) in the state PDBondPlasticStretch; the partner uses the slot of -xi, which is
+    //! lattice_slots_ - 1 - slot (lexicographic order of a symmetric set); with check: throws if
+    //! xi is not a lattice vector
+    int bond_plastic_slot(const double* xi, bool check) const;
+
+    //! check once that all bonds are lattice vectors (elastic-plastic bonds)
+    void check_bond_lattice() const;
+
     //! outward surface normals of the boundary particles for the contact with PD particles (once)
     void compute_boundary_contact_normals();
 
@@ -273,6 +282,19 @@ namespace Particle
     //! sigma_p dx^(d-1) of the normal contact force on a PD particle (2D: per unit thickness)
     const double crushing_pressure_;
     const double crushing_force_;
+
+    //! elastic-plastic bonds: flag, tensile yield stretch, hardening ratio eta (bond tangent / c),
+    //! compressive yield and failure stretches (magnitudes, 0: off), number of lattice directions
+    //! and the slot of each (offset xi / dx with components in [-4, 4], index
+    //! (o0 + 4) 81 + (o1 + 4) 9 + o2 + 4; -1: none); lattice of the bonds checked once
+    const bool bond_plasticity_;
+    const double bond_yield_stretch_;
+    const double bond_hardening_ratio_;
+    const double bond_compressive_yield_stretch_;
+    const double bond_compressive_failure_stretch_;
+    int lattice_slots_ = 0;
+    std::array<int, 729> lattice_slot_;
+    mutable bool checkedbondlattice_ = false;
 
     //! crushing: global ids of the owned PD particles crushed in the last evaluation of all
     //! interactions (removed before the next update of the connectivity), totals on this processor

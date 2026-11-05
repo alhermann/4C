@@ -122,8 +122,45 @@ Particle::SPHPeridynamic::SPHPeridynamic(const Teuchos::ParameterList& particle_
           particle_params.sublist("PD").get<double>("BOUNDARY_CONTACT_CRUSHING_PRESSURE")),
       crushing_force_(
           crushing_pressure_ * dx_pd_ *
-          (peridynamic_dimension_ == PeridynamicDimension::Peridynamic_3D ? dx_pd_ : 1.0))
+          (peridynamic_dimension_ == PeridynamicDimension::Peridynamic_3D ? dx_pd_ : 1.0)),
+      bond_plasticity_(particle_params.sublist("PD").get<bool>("BOND_PLASTICITY")),
+      bond_yield_stretch_(particle_params.sublist("PD").get<double>("BOND_YIELD_STRETCH")),
+      bond_hardening_ratio_(particle_params.sublist("PD").get<double>("BOND_HARDENING_RATIO")),
+      bond_compressive_yield_stretch_(
+          particle_params.sublist("PD").get<double>("BOND_COMPRESSIVE_YIELD_STRETCH")),
+      bond_compressive_failure_stretch_(
+          particle_params.sublist("PD").get<double>("BOND_COMPRESSIVE_FAILURE_STRETCH"))
 {
+  // elastic-plastic bonds: one slot per lattice direction within the horizon (both particles of a
+  // bond store its plastic stretch, in the slots of xi and -xi)
+  lattice_slot_.fill(-1);
+  FOUR_C_ASSERT_ALWAYS(bond_compressive_failure_stretch_ == 0.0 or bond_plasticity_,
+      "PD: BOND_COMPRESSIVE_FAILURE_STRETCH requires BOND_PLASTICITY!");
+  if (bond_plasticity_)
+  {
+    FOUR_C_ASSERT_ALWAYS(bond_yield_stretch_ > 0.0 and bond_hardening_ratio_ >= 0.0 and
+                             bond_hardening_ratio_ < 1.0 and
+                             bond_compressive_yield_stretch_ >= 0.0 and
+                             bond_compressive_failure_stretch_ >= 0.0,
+        "PD elastic-plastic bonds require BOND_YIELD_STRETCH > 0, 0 <= BOND_HARDENING_RATIO < 1 "
+        "and BOND_COMPRESSIVE_YIELD_STRETCH, BOND_COMPRESSIVE_FAILURE_STRETCH >= 0!");
+    const double m = horizon_pd_ / dx_pd_;
+    FOUR_C_ASSERT_ALWAYS(m < 4.0 + 1.0e-6,
+        "PD elastic-plastic bonds support horizons of up to 4 dx (horizon {} dx)!", m);
+    int slots = 0;
+    for (int o0 = -4; o0 <= 4; ++o0)
+      for (int o1 = -4; o1 <= 4; ++o1)
+        for (int o2 = -4; o2 <= 4; ++o2)
+        {
+          const int r2 = o0 * o0 + o1 * o1 + o2 * o2;
+          if (r2 > 0 and std::sqrt(static_cast<double>(r2)) <= m + 1.0e-6)
+            lattice_slot_[(o0 + 4) * 81 + (o1 + 4) * 9 + o2 + 4] = slots++;
+        }
+    FOUR_C_ASSERT_ALWAYS(
+        slots <= 256, "PD elastic-plastic bonds: {} lattice directions > 256!", slots);
+    lattice_slots_ = slots;
+  }
+
   FOUR_C_ASSERT_ALWAYS(
       crushing_pressure_ >= 0.0 and (crushing_pressure_ == 0.0 or boundary_contact_smooth_),
       "PD contact: BOUNDARY_CONTACT_CRUSHING_PRESSURE must not be negative and requires "
@@ -310,6 +347,9 @@ void Particle::SPHPeridynamic::insert_particle_states_of_particle_types(
 
       // plastic overlap of the contact with the smooth boundary surface (crushing)
       if (crushing_pressure_ > 0.0) particlestates.insert(Particle::State::PDBoundaryCrushing);
+
+      // plastic stretch of the bonds (elastic-plastic bonds)
+      if (bond_plasticity_) particlestates.insert(Particle::State::PDBondPlasticStretch);
     }
     else if (typeIt.first == Particle::Type::BoundaryPhase)
     {
@@ -425,6 +465,48 @@ void Particle::SPHPeridynamic::init_peridynamic_bondlist()
 
   Core::IO::cout << "Number of initialized peridynamic bonds on this proc: " << bondlist_->size()
                  << Core::IO::endl;
+}
+
+int Particle::SPHPeridynamic::bond_plastic_slot(const double* xi, const bool check) const
+{
+  const double inv_dx = 1.0 / dx_pd_;
+  int index = 0;
+  for (int dim = 0; dim < 3; ++dim)
+  {
+    const double o = xi[dim] * inv_dx;
+    const int o_int = static_cast<int>(std::lround(o));
+    if (check)
+      FOUR_C_ASSERT_ALWAYS(std::abs(o - o_int) < 0.05 and std::abs(o_int) <= 4,
+          "PD elastic-plastic bonds require a regular lattice: bond vector component {} dx!", o);
+    index = 9 * index + o_int + 4;
+  }
+  const int slot = lattice_slot_[index];
+  if (check)
+    FOUR_C_ASSERT_ALWAYS(
+        slot >= 0, "PD elastic-plastic bonds: bond outside the lattice directions!");
+  return slot;
+}
+
+void Particle::SPHPeridynamic::check_bond_lattice() const
+{
+  const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
+      particleengineinterface_->get_particle_container_bundle();
+  for (const auto& [first, second] : *bondlist_)
+  {
+    const double* ref_pos_i =
+        particlecontainerbundle->get_specific_container(std::get<0>(first), std::get<1>(first))
+            ->get_ptr_to_state(Particle::State::ReferencePosition, std::get<2>(first));
+    const double* ref_pos_j =
+        particlecontainerbundle->get_specific_container(std::get<0>(second), std::get<1>(second))
+            ->get_ptr_to_state(Particle::State::ReferencePosition, std::get<2>(second));
+    double xi[3];
+    ParticleUtils::vec_set(xi, ref_pos_j);
+    ParticleUtils::vec_sub(xi, ref_pos_i);
+    const int slot = bond_plastic_slot(xi, true);
+    const double minus_xi[3] = {-xi[0], -xi[1], -xi[2]};
+    FOUR_C_ASSERT_ALWAYS(bond_plastic_slot(minus_xi, true) == lattice_slots_ - 1 - slot,
+        "PD elastic-plastic bonds: lattice slots of xi and -xi are not mirrored!");
+  }
 }
 
 void Particle::SPHPeridynamic::check_surface_correction_factors() const
@@ -591,6 +673,12 @@ void Particle::SPHPeridynamic::compute_bond_forces() const
     checkedsurfacecorrection_ = true;
   }
 
+  if (bond_plasticity_ and not checkedbondlattice_)
+  {
+    check_bond_lattice();
+    checkedbondlattice_ = true;
+  }
+
   const Particle::ParticleContainerBundleShrdPtr particlecontainerbundle =
       particleengineinterface_->get_particle_container_bundle();
 
@@ -658,9 +746,45 @@ void Particle::SPHPeridynamic::compute_bond_forces() const
     // check the stretch
     const double critical_stretch = 0.5 * (critical_stretch_i[0] + critical_stretch_j[0]);
 
-    // if critical stretch is not reached
-    if (stretch < critical_stretch)
+    // if critical stretch is not reached (elastic-plastic bonds: nor the compressive failure
+    // stretch)
+    if (stretch < critical_stretch and not(bond_compressive_failure_stretch_ > 0.0 and
+                                           stretch <= -bond_compressive_failure_stretch_))
     {
+      // elastic-plastic bonds: return map of the plastic stretch s_p (pair-symmetric: the owner of
+      // each particle updates the copy in its slot from the same stretch), force with s - s_p
+      if (bond_plasticity_)
+      {
+        const int slot_i = bond_plastic_slot(xi, false);
+        const int slot_j = lattice_slots_ - 1 - slot_i;
+        double* plastic_i = status_i == Particle::Status::Owned
+                                ? container_i->get_ptr_to_state_writable(
+                                      Particle::State::PDBondPlasticStretch, particle_i)
+                                : nullptr;
+        double* plastic_j = status_j == Particle::Status::Owned
+                                ? container_j->get_ptr_to_state_writable(
+                                      Particle::State::PDBondPlasticStretch, particle_j)
+                                : nullptr;
+        FOUR_C_ASSERT(plastic_i or plastic_j, "PD bond without an owned particle!");
+        double s_p = plastic_i ? plastic_i[slot_i] : plastic_j[slot_j];
+
+        // tension: yield at s - s_p = s_Y + h max(s_p, 0) with h = eta / (1 - eta), so that the
+        // tangent after yield is eta c; compression: perfectly plastic at s - s_p = -s_Yc
+        const double h = bond_hardening_ratio_ / (1.0 - bond_hardening_ratio_);
+        if (stretch - s_p > bond_yield_stretch_ + h * std::max(s_p, 0.0))
+        {
+          s_p = stretch - bond_yield_stretch_;
+          if (s_p > 0.0) s_p /= (1.0 + h);
+        }
+        else if (bond_compressive_yield_stretch_ > 0.0 and
+                 stretch - s_p < -bond_compressive_yield_stretch_)
+          s_p = stretch + bond_compressive_yield_stretch_;
+
+        if (plastic_i) plastic_i[slot_i] = s_p;
+        if (plastic_j) plastic_j[slot_j] = s_p;
+        stretch -= s_p;
+      }
+
       double m[3];
       ParticleUtils::vec_set_scale(m, 1.0 / xi_eta_norm, xi_eta);
 

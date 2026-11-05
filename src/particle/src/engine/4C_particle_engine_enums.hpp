@@ -120,7 +120,10 @@ namespace Particle
     PDBoundaryContactSpring,  //!< tangential displacement of the contact with the smooth boundary
     /*---------------------------------------------------------------------------*/
     // particle state for the crushing of peridynamic particles at the smooth boundary surface
-    PDBoundaryCrushing  //!< plastic overlap (crushed depth, <= 0) at the smooth boundary
+    PDBoundaryCrushing,  //!< plastic overlap (crushed depth, <= 0) at the smooth boundary
+    /*---------------------------------------------------------------------------*/
+    // particle state for elastic-plastic bonds of peridynamic particles
+    PDBondPlasticStretch  //!< plastic stretch of the bonds of a pd particle (per lattice direction)
     /*---------------------------------------------------------------------------*/
   };
 

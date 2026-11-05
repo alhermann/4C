@@ -84,6 +84,9 @@ int Particle::enum_to_state_dim(const ParticleState& state)
     case ParticleState::PDBoundaryCrushing:
       dim = 1;
       break;
+    case ParticleState::PDBondPlasticStretch:
+      dim = 256;  // lattice directions within a horizon of up to 4 dx
+      break;
 
     default:
       FOUR_C_THROW("particle state unknown!");
@@ -259,6 +262,9 @@ std::string Particle::enum_to_state_name(const ParticleState& state)
       break;
     case ParticleState::PDBoundaryCrushing:
       name = "pd_boundary_crushing";
+      break;
+    case ParticleState::PDBondPlasticStretch:
+      name = "pd_bond_plastic_stretch";
       break;
     case ParticleState::OpenBoundaryId:
       name = "open_boundary_id";

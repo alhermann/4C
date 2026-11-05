@@ -151,6 +151,12 @@ std::map<int, std::vector<char>> Particle::ParticleUtils::immediate_send_recv_kn
   const int numsendtoprocs = static_cast<int>(send_to_procs.size());
   const int numrecvfromprocs = static_cast<int>(receive_from_procs.size());
 
+  // message tags of this pattern differ from those of immediate_recv_blocking_send: a processor
+  // may already be here (no collective at the start) while another one still probes for sizes with
+  // MPI_ANY_SOURCE there, which must not receive these size messages (some of them are 0)
+  constexpr int sizetag = 1235;
+  constexpr int datatag = 5679;
+
   // ---- send size of messages to ALL known targets (0 if no data) ----
   std::vector<MPI_Request> sizesendrequest(numsendtoprocs);
   std::vector<int> msgsizestosend(numsendtoprocs);
@@ -161,7 +167,7 @@ std::map<int, std::vector<char>> Particle::ParticleUtils::immediate_send_recv_kn
       auto it = sdata.find(torank);
       msgsizestosend[counter] = (it != sdata.end()) ? static_cast<int>(it->second.size()) : 0;
       MPI_Isend(
-          &msgsizestosend[counter], 1, MPI_INT, torank, 1234, comm, &sizesendrequest[counter]);
+          &msgsizestosend[counter], 1, MPI_INT, torank, sizetag, comm, &sizesendrequest[counter]);
       ++counter;
     }
   }
@@ -172,7 +178,7 @@ std::map<int, std::vector<char>> Particle::ParticleUtils::immediate_send_recv_kn
   std::vector<MPI_Request> sizerecvrequest(numrecvfromprocs);
   for (int i = 0; i < numrecvfromprocs; ++i)
   {
-    MPI_Irecv(&msgsizestorecv[i], 1, MPI_INT, recvsources[i], 1234, comm, &sizerecvrequest[i]);
+    MPI_Irecv(&msgsizestorecv[i], 1, MPI_INT, recvsources[i], sizetag, comm, &sizerecvrequest[i]);
   }
 
   // ---- wait for all size receives to complete ----
@@ -185,7 +191,7 @@ std::map<int, std::vector<char>> Particle::ParticleUtils::immediate_send_recv_kn
     if (msgsizestorecv[i] > 0)
     {
       rdata[recvsources[i]].resize(msgsizestorecv[i]);
-      MPI_Irecv(rdata[recvsources[i]].data(), msgsizestorecv[i], MPI_CHAR, recvsources[i], 5678,
+      MPI_Irecv(rdata[recvsources[i]].data(), msgsizestorecv[i], MPI_CHAR, recvsources[i], datatag,
           comm, &recvrequest[i]);
     }
     else
@@ -202,7 +208,7 @@ std::map<int, std::vector<char>> Particle::ParticleUtils::immediate_send_recv_kn
   for (auto& p : sdata)
   {
     sendrequest.emplace_back();
-    MPI_Isend(p.second.data(), static_cast<int>(p.second.size()), MPI_CHAR, p.first, 5678, comm,
+    MPI_Isend(p.second.data(), static_cast<int>(p.second.size()), MPI_CHAR, p.first, datatag, comm,
         &sendrequest.back());
   }
 

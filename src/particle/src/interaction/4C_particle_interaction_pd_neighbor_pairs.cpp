@@ -25,6 +25,7 @@
 #include <Teuchos_TimeMonitor.hpp>
 
 #include <algorithm>
+#include <fstream>
 #include <tuple>
 
 FOUR_C_NAMESPACE_OPEN
@@ -281,7 +282,31 @@ void Particle::PDNeighborPairs::evaluate_particle_pairs()
     ++iter;
   }
 
+  count_bonds_of_owned_particles();
+
   haveevaluatedparticlepairs_ = true;
+}
+
+void Particle::PDNeighborPairs::count_bonds_of_owned_particles() const
+{
+  // the local bond list holds every intact bond of an owned particle, so its number of intact bonds
+  // follows from the list alone; this also counts the loss of bonds whose partner vanished (e.g. a
+  // particle removed by the crushing contact), which are dropped above without a bond breaking
+  Particle::ParticleContainer* container = particlecontainerbundle_->get_specific_container(
+      Particle::Type::PDPhase, Particle::Status::Owned);
+  for (int i = 0; i < container->particles_stored(); ++i)
+    container->get_ptr_to_state_writable(Particle::State::CurrentConnectedBonds, i)[0] = 0.0;
+  for (const auto& [first, second] : *bondlist_)
+  {
+    for (const Particle::LocalGlobalIndexTuple* tuple : {&first, &second})
+    {
+      if (std::get<0>(*tuple) != Particle::Type::PDPhase or
+          std::get<1>(*tuple) != Particle::Status::Owned)
+        continue;
+      container->get_ptr_to_state_writable(
+          Particle::State::CurrentConnectedBonds, std::get<2>(*tuple))[0] += 1.0;
+    }
+  }
 }
 
 void Particle::PDNeighborPairs::setup_peridynamic_pair_hashes()
@@ -650,6 +675,24 @@ void Particle::PDNeighborPairs::read_restart(
   {
     std::set<long> known_bond_hashes = build_known_peridynamic_bond_hashes(bondlist_);
     unpack_peridynamic_bond_list_data(*buffer, known_bond_hashes);
+  }
+}
+
+void Particle::PDNeighborPairs::write_bond_list(const std::string& filename) const
+{
+  // one line per bond of the local bond list: global ids of the two particles (smaller first) and
+  // for each of them 1 if it is owned by this processor, else 0
+  std::ofstream file(filename);
+  if (not file) FOUR_C_THROW("cannot open the bond list file {}", filename);
+  file << "# globalid_a globalid_b owned_a owned_b\n";
+  for (const auto& [first, second] : *bondlist_)
+  {
+    const bool swap = std::get<3>(first) > std::get<3>(second);
+    const Particle::LocalGlobalIndexTuple& a = swap ? second : first;
+    const Particle::LocalGlobalIndexTuple& b = swap ? first : second;
+    file << std::get<3>(a) << " " << std::get<3>(b) << " "
+         << (std::get<1>(a) == Particle::Status::Owned) << " "
+         << (std::get<1>(b) == Particle::Status::Owned) << "\n";
   }
 }
 

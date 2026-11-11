@@ -79,6 +79,9 @@ namespace Particle
     //! read restart of particle interaction handler
     void read_restart(const std::shared_ptr<Core::IO::DiscretizationReader> reader) override;
 
+    //! write particle interaction runtime output (and the local bond lists if requested)
+    void write_interaction_runtime_output(const int step, const double time) override;
+
     //! insert interaction dependent states of all particle types
     void insert_particle_states_of_particle_types(
         std::map<Particle::Type, std::set<Particle::State>>& particlestatestotypes) override;
@@ -224,6 +227,9 @@ namespace Particle
 
     //! runtime csv output of the resultant force on boundary particles (with peridynamics)
     bool writeboundaryforce_ = false;
+
+    //! local bond lists written with the result output (WRITE_BOND_LIST, with peridynamics)
+    bool writebondlist_ = false;
 
     //! time integral of the boundary forces on this processor since the last output
     std::vector<double> boundaryimpulse_dbc_funct_ = std::vector<double>(3, 0.0);

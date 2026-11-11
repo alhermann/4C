@@ -31,6 +31,7 @@
 #include <limits>
 #include <numbers>
 #include <set>
+#include <unordered_set>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -2086,9 +2087,10 @@ void Particle::SPHPeridynamic::remove_crushed_particles()
 
   // owned PD particles marked as crushed in the last evaluation of all interactions (the local
   // indices are taken from the global ids: the containers may have changed since); notes: the
-  // bonds of their partners are dropped without decreasing CurrentConnectedBonds (the damage of
-  // the partners, output only, reads low); the marks and totals are not written to the restart
-  // (after a restart a marked particle is removed one step later)
+  // bonds to removed particles are dropped from the local bond lists of all processors below, so
+  // the number of intact bonds (damage) of their partners and a bond-list output of this step
+  // exclude them; the marks and totals are not written to the restart (after a restart a marked
+  // particle is removed one step later)
   const int typevectorsize =
       static_cast<int>(*(--particlecontainerbundle_->get_particle_types().end())) + 1;
   std::vector<std::set<int>> particlestoremove(typevectorsize);
@@ -2125,6 +2127,36 @@ void Particle::SPHPeridynamic::remove_crushed_particles()
     Core::IO::cout << "PD crushing: " << removed << " particle(s) crushed and removed (total "
                    << total << ", mass " << totals[0] << ", kinetic energy " << totals[1]
                    << "), plastic work of the contact " << totals[2] << Core::IO::endl;
+
+  // drop the bonds to the removed particles from the local bond lists of all processors and
+  // decrease the number of intact bonds of their owned partners (the local indices of the entries
+  // are those of the last evaluation of the particle pairs and still valid before the removal)
+  {
+    const std::vector<int> allremoved = Core::Communication::all_reduce(globalidstofree, comm_);
+    const std::unordered_set<int> gone(allremoved.begin(), allremoved.end());
+    Particle::ParticleContainer* owned = particlecontainerbundle_->get_specific_container(
+        Particle::Type::PDPhase, Particle::Status::Owned);
+    std::size_t iter = 0;
+    while (iter < bondlist_->size())
+    {
+      const auto& [first, second] = (*bondlist_)[iter];
+      if (not gone.contains(std::get<3>(first)) and not gone.contains(std::get<3>(second)))
+      {
+        ++iter;
+        continue;
+      }
+      for (const Particle::LocalGlobalIndexTuple* tuple : {&first, &second})
+      {
+        if (gone.contains(std::get<3>(*tuple)) or std::get<0>(*tuple) != Particle::Type::PDPhase or
+            std::get<1>(*tuple) != Particle::Status::Owned or std::get<2>(*tuple) < 0)
+          continue;
+        owned->get_ptr_to_state_writable(
+            Particle::State::CurrentConnectedBonds, std::get<2>(*tuple))[0] -= 1.0;
+      }
+      (*bondlist_)[iter] = std::move(bondlist_->back());
+      bondlist_->pop_back();
+    }
+  }
 
   // free their global ids and remove them (invalidates the connectivity: the next update rebuilds
   // ghosting and neighbor pairs, and bonds to removed particles are dropped from the bond list)

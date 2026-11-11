@@ -9,6 +9,7 @@
 
 #include "4C_comm_mpi_utils.hpp"
 #include "4C_global_data.hpp"
+#include "4C_io_control.hpp"
 #include "4C_io_pstream.hpp"
 #include "4C_io_runtime_csv_writer.hpp"
 #include "4C_mat_particle_pd.hpp"
@@ -213,6 +214,9 @@ void Particle::ParticleInteractionSPH::setup(
     }
   }
 
+  // local bond lists with the result output (consistency checks)
+  writebondlist_ = peridynamics_ and params_.sublist("PD").get<bool>("WRITE_BOND_LIST");
+
   // short screen output
   if (!openboundaries_.empty() && particleengineinterface_->have_periodic_boundary_conditions())
   {
@@ -290,6 +294,19 @@ void Particle::ParticleInteractionSPH::read_restart(
 
   // call peridynamic specific function
   if (peridynamics_) neighborpairs_pd_->read_restart(reader);
+}
+
+void Particle::ParticleInteractionSPH::write_interaction_runtime_output(
+    const int step, const double time)
+{
+  // call base class function
+  ParticleInteractionBase::write_interaction_runtime_output(step, time);
+
+  // local bond list of this processor (consistency checks)
+  if (writebondlist_)
+    neighborpairs_pd_->write_bond_list(
+        Global::Problem::instance()->output_control_file()->file_name() + "-bondlist-" +
+        std::to_string(step) + "." + std::to_string(myrank_) + ".txt");
 }
 
 void Particle::ParticleInteractionSPH::insert_particle_states_of_particle_types(
@@ -676,13 +693,14 @@ void Particle::ParticleInteractionSPH::post_evaluate_time_step(
   // evaluate phase change
   if (phasechange_) phasechange_->evaluate_phase_change(particlesfromphasetophase);
 
-  // evaluate peridynamic damage
-  if (peridynamics_) peridynamics_->damage_evaluation();
-
-  // single rate: crushed PD particles are removed before the update of the connectivity of the next
-  // step (with substeps: at the end of the substeps of the next step)
+  // single rate: crushed PD particles are removed before the damage evaluation and before the
+  // update of the connectivity of the next step (with substeps: at the end of the substeps of the
+  // next step)
   if (peridynamics_ and peridynamics_->pd_substeps() == 1)
     peridynamics_->remove_crushed_particles();
+
+  // evaluate peridynamic damage
+  if (peridynamics_) peridynamics_->damage_evaluation();
 }
 
 double Particle::ParticleInteractionSPH::max_interaction_distance() const

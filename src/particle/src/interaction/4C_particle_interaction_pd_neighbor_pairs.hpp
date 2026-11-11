@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -118,7 +119,13 @@ namespace Particle
     //! read restart
     void read_restart(const std::shared_ptr<Core::IO::DiscretizationReader> reader);
 
+    //! write the local bond list of this processor to a text file (consistency checks)
+    void write_bond_list(const std::string& filename) const;
+
    private:
+    //! number of intact bonds of every owned PD particle from the local bond list
+    void count_bonds_of_owned_particles() const;
+
     //! evaluate particle pairs
     void evaluate_particle_pairs();
 

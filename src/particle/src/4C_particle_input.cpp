@@ -671,6 +671,14 @@ std::vector<Core::IO::InputSpec> Particle::valid_parameters()
                               "boundary-force-history (mean force since the previous row); 0 = off",
                   .default_value = 0}),
 
+          // local bond lists with the result output (consistency checks)
+          parameter<bool>("WRITE_BOND_LIST",
+              {.description = "with the result output, every processor writes its local bond "
+                              "list to <output>-bondlist-<step>.<rank>.txt: per bond the global "
+                              "ids of its two particles and whether each one is owned by the "
+                              "processor (for checks of the parallel consistency only)",
+                  .default_value = false}),
+
           // surface correction of the bond stiffness
           parameter<bool>("SURFACE_CORRECTION",
               {.description =
